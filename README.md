@@ -22,35 +22,65 @@
 
 ## 一键部署
 
-### 方式 A：Render（推荐，有免费额度）
+### 方式 A：ClawCloud Run（免费额度，免信用卡，镜像部署）
 
-1. **把本项目推到 GitHub**
-   - 有 git：`git init && git add -A && git commit -m "init" && git push`
-   - **没有 git**：在 GitHub 网页上新建仓库 → 点 `Add file → Upload files` → 把本目录里除 `node_modules/`、`storage/`、`.env` 之外的文件全部拖进去 → Commit。（GitHub 网页上传不会自动带上点开头的配置文件，`.gitignore`、`.env.example`、`.github/` 可以之后按需补，不影响部署）
-2. **整理成下面这个链接**（把 `<用户名>/<仓库名>` 换成你的）：
+GitHub Actions 已经把镜像构建好推到 GHCR（见 `.github/workflows/publish-image.yml`，每次推 `main` 自动更新），所以这里只需要填一个镜像地址。
+
+**前置一步**：首次使用要把该镜像包设为公开——仓库主页右侧 `Packages` → `file-box` → `Package settings` → 页面底部 `Change visibility` → 选 `Public` → 按提示输入包名确认。
+
+1. 打开 <https://run.claw.cloud>，用 GitHub 账号登录（永久每月 $5 免费额度，无需信用卡；要求 GitHub 账号注册满 6 个月）。
+2. 左上角区域选 **Singapore**（离得近，延迟低）。
+3. 点 **App Launchpad** → 右上角 **Create App**，按下面填：
+
+   | 字段 | 值 |
+   | --- | --- |
+   | Application Name | `file-box` |
+   | Image | `Public` → `ghcr.io/xujunyaonb666/file-box:latest` |
+   | Usage / Replicas | `Fixed` / `1` |
+   | CPU / Memory | `1` / `512M` |
+   | Container Port | `3000` |
+   | Public Access | 打开 |
+   | Environment Variables | 见下表 |
+   | Local Storage | `1G`，Mount Path 填 `/data` |
+
+   环境变量：
+
+   ```
+   ADMIN_USER=xujunyao
+   ADMIN_PASSWORD=shenye128
+   SESSION_SECRET=<一串随机字符，可用 openssl rand -hex 32 生成>
+   DATA_DIR=/data
+   SESSION_TTL_HOURS=12
+   MAX_UPLOAD_MB=512
+   ```
+
+4. 点 **Deploy Application**，等 Public Address 变绿，拿到形如 `https://xxxx.region.clawcloudrun.com` 的地址，打开就是登录页。
+
+> `SESSION_SECRET` 一定要填且固定，不填每次重启都会随机生成、所有人被登出。
+> 免费实例不稳定、可能被重排，重要文件请自己留底。
+
+### 方式 B：Render（有免费额度）
+
+1. 用 GitHub 账号登录 Render，打开：
 
    ```
    https://render.com/deploy?repo=https://github.com/<用户名>/<仓库名>
    ```
 
-3. 用 GitHub 账号登录 Render，打开上面这个链接 → Render 会自动读取仓库里的 `render.yaml` → 直接确认创建，**不用填任何配置**。
-4. 一两分钟后拿到形如 `https://file-box-xxxx.onrender.com` 的地址，打开就是登录页。
+2. Render 自动读取仓库里的 `render.yaml`，直接确认创建，不用填配置。
+3. 一两分钟后拿到 `https://file-box-xxxx.onrender.com`。
+4. 免费实例闲置约 15 分钟休眠，下次访问要 30–60 秒冷启动。
 
-> 账号：`xujunyao`　密码：`shenye128`
-> 要改的话去 Render 控制台 → 该服务 → Environment → 修改 `ADMIN_PASSWORD` → Save，服务会自动重启。
+> 部分地区网络可能打不开 render.com，遇到就别走这条路。
 
-> 免费实例闲置约 15 分钟后会休眠，下次访问需要 30–60 秒冷启动（页面会转一会儿才出来，属正常现象），要一直在线就升级成 Starter。
-
-### 方式 B：Railway / Zeabur / Sealos 等任意支持 Docker 的平台
-
-这些平台都认 Dockerfile，流程一致：
+### 方式 C：Railway / Sealos / 任何支持 Dockerfile 的平台
 
 1. 新建项目 → 选择 `Deploy from GitHub repo` → 选中本仓库；
 2. 平台自动识别 `Dockerfile` 构建；
-3. 在环境变量里补上 `ADMIN_USER`、`ADMIN_PASSWORD`、`SESSION_SECRET`；
-4. 挂载一个持久卷到 `/data`（可选，不挂就是重启丢文件）。
+3. 环境变量里补上 `ADMIN_USER`、`ADMIN_PASSWORD`、`SESSION_SECRET`；
+4. 挂一个持久卷到 `/data`（不挂就是重启丢文件）。
 
-### 方式 C：自己的服务器 / 本地 Docker
+### 方式 D：自己的服务器 / 本地 Docker
 
 ```bash
 docker build -t file-box .
@@ -134,7 +164,8 @@ npm test           # 冒烟测试：登录/上传/列表/下载/删除/退出全
 ├── Dockerfile                # 任意容器平台可用
 ├── render.yaml               # Render 一键部署蓝图
 ├── .env.example
-├── （可选）.github/workflows/ci.yml   # 测试工作流，推送它需要带 workflow 权限的令牌
+├── .github/workflows/ci.yml        # 测试工作流（推送它需要带 workflow 权限的令牌）
+├── .github/workflows/publish-image.yml  # 构建镜像并推送到 GHCR
 └── storage/                  # 运行时生成，存文件（不进 Git）
 ```
 
