@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>文件站 · 私有下载</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%232563eb'/%3E%3Cpath d='M11 8.5h7l4 4V24a1.5 1.5 0 0 1-1.5 1.5h-9.5A1.5 1.5 0 0 1 9.5 24V10A1.5 1.5 0 0 1 11 8.5Z' fill='%23fff' opacity='.92'/%3E%3Cpath d='M18 8.5v4h4' fill='none' stroke='%232563eb' stroke-width='1.4'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+<div class="page">
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M4 7.5A1.5 1.5 0 0 1 5.5 6h4l1.8 1.8h7.2A1.5 1.5 0 0 1 20 9.3v8.2A1.5 1.5 0 0 1 18.5 19h-13A1.5 1.5 0 0 1 4 17.5Z"/>
+        </svg>
+      </span>
+      <div class="brand-text">
+        <h1>文件站</h1>
+        <p>私有文件下载</p>
+      </div>
+    </div>
+    <div class="topbar-actions" id="topbarActions" hidden>
+      <span class="user-chip" id="userChip"></span>
+      <button class="btn btn-ghost" id="logoutBtn" type="button">退出</button>
+    </div>
+  </header>
+
+  <section id="loginView" class="login-wrap">
+    <form class="card login-card" id="loginForm">
+      <h2>登录</h2>
+      <p class="hint">登录后即可浏览并下载全部文件</p>
+      <label class="field">
+        <span>账号</span>
+        <input id="username" type="text" autocomplete="username" autocapitalize="off" spellcheck="false" required>
+      </label>
+      <label class="field">
+        <span>密码</span>
+        <input id="password" type="password" autocomplete="current-password" required>
+      </label>
+      <button class="btn btn-primary btn-block" id="loginBtn" type="submit">登录</button>
+      <p class="form-msg" id="loginMsg" role="status"></p>
+    </form>
+  </section>
+
+  <section id="appView" class="app" hidden>
+    <div class="panel">
+      <div class="panel-head">
+        <div>
+          <h2>全部文件</h2>
+          <p class="meta" id="listMeta">正在加载…</p>
+        </div>
+        <div class="head-actions">
+          <input id="searchInput" class="search" type="search" placeholder="搜索文件名" autocomplete="off">
+          <button class="btn btn-ghost" id="refreshBtn" type="button">刷新</button>
+        </div>
+      </div>
+
+      <div class="dropzone" id="dropzone">
+        <input type="file" id="fileInput" multiple hidden>
+        <div class="dz-inner">
+          <p><strong>拖拽文件到此处</strong>，或<button type="button" class="link" id="pickBtn">选择文件</button></p>
+          <p class="meta" id="dzHint"></p>
+        </div>
+      </div>
+
+      <ul class="queue" id="uploadQueue"></ul>
+
+      <div class="table-wrap">
+        <table class="file-table">
+          <thead>
+            <tr>
+              <th>文件名</th>
+              <th class="col-size">大小</th>
+              <th class="col-date">上传时间</th>
+              <th class="col-act">操作</th>
+            </tr>
+          </thead>
+          <tbody id="fileBody"></tbody>
+        </table>
+      </div>
+      <div class="empty" id="emptyState" hidden></div>
+    </div>
+  </section>
+
+  <footer class="foot">FileBox · 单账号私有文件站</footer>
+</div>
+
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+<script src="./app.js"></script>
+</body>
+</html>

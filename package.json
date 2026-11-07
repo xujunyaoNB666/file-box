@@ -1,0 +1,21 @@
+{
+  "name": "file-box",
+  "version": "1.0.0",
+  "private": true,
+  "description": "私有文件下载站：账号登录、文件上传管理、公开/受控下载",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "test": "node scripts/smoke-test.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": ["file", "download", "express", "github", "deploy"],
+  "license": "MIT",
+  "dependencies": {
+    "busboy": "^1.6.0",
+    "express": "^4.21.2"
+  }
+}

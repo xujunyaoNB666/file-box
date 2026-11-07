@@ -1,0 +1,39 @@
+# Render 蓝图：在 GitHub 上点一次 Deploy 按钮即可完成部署
+# 文档：https://render.com/docs/blueprint-spec
+
+services:
+  - type: web
+    name: file-box
+    runtime: node
+    plan: free
+    region: singapore
+    buildCommand: npm install --omit=dev
+    startCommand: node server.js
+    healthCheckPath: /healthz
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: ADMIN_USER
+        value: xujunyao
+      # 默认密码，部署后可在 Render 控制台 Environment 里改成自己的
+      - key: ADMIN_PASSWORD
+        value: shenye128
+      # 会话签名密钥，由 Render 自动生成随机值
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: SESSION_TTL_HOURS
+        value: "12"
+      - key: MAX_UPLOAD_MB
+        value: "512"
+      - key: COOKIE_SECURE
+        value: "true"
+      - key: DATA_DIR
+        value: /data
+
+    # ⚠️ 免费实例不支持持久磁盘(Persistent Disk)，上传的文件会在实例重启/重新部署后丢失。
+    #    要长期保存文件，升级到付费实例后取消下面这段注释即可：
+    # disk:
+    #   name: file-box-data
+    #   mountPath: /data
+    #   sizeGB: 1

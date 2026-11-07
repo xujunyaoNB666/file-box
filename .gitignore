@@ -1,0 +1,14 @@
+# 依赖与运行产物
+node_modules/
+storage/
+*.log
+
+# 环境变量（含密码，切勿提交）
+.env
+.env.local
+
+# 系统/编辑器
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
