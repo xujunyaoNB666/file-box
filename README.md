@@ -133,8 +133,8 @@ npm test           # 冒烟测试：登录/上传/列表/下载/删除/退出全
 ├── scripts/smoke-test.mjs    # 冒烟测试
 ├── Dockerfile                # 任意容器平台可用
 ├── render.yaml               # Render 一键部署蓝图
-└── （可选）.github/workflows/ci.yml  # 测试工作流，需带 workflow 权限的令牌才能推送
 ├── .env.example
+├── （可选）.github/workflows/ci.yml   # 测试工作流，推送它需要带 workflow 权限的令牌
 └── storage/                  # 运行时生成，存文件（不进 Git）
 ```
 
