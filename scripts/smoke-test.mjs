@@ -412,7 +412,7 @@ try {
   });
   const mgrLoginJson = await mgrLogin.json();
   check('被授予的账号立即是管理员', mgrLoginJson.role === 'admin', JSON.stringify(mgrLoginJson));
-  const mgrCookie = (mgrLogin.headers.getSetCookie?.() ?? []).map((c) => c.split(';')[0])[0] || '';
+  let mgrCookie = (mgrLogin.headers.getSetCookie?.() ?? []).map((c) => c.split(';')[0])[0] || '';
 
   const mgrSettings = await fetch(`${BASE}/api/admin/settings`, { headers: { cookie: mgrCookie } });
   check('新管理员能打开后台', mgrSettings.status === 200, `实际 ${mgrSettings.status}`);
@@ -447,12 +447,27 @@ try {
   });
   check('新管理员设好二级密码后可以授予他人', mgrGrantOk.status === 200, `实际 ${mgrGrantOk.status}`);
 
-  const otherPw = await fetch(`${BASE}/api/admin/users/password`, {
+  const otherAdminPw = await fetch(`${BASE}/api/admin/users/password`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', cookie: mgrCookie },
+    body: JSON.stringify({ username: 'mgr02', password: 'hacked1' }),
+  });
+  check('普通管理员不能改另一个管理员的密码', otherAdminPw.status === 403, `实际 ${otherAdminPw.status}`);
+
+  const primaryAdminPw = await fetch(`${BASE}/api/admin/users/password`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', cookie: cookieHeader },
-    body: JSON.stringify({ username: 'mgr01', password: 'hacked1' }),
+    body: JSON.stringify({ username: 'mgr01', password: 'mgr01pass2' }),
   });
-  check('不能修改另一个管理员的密码', otherPw.status === 403, `实际 ${otherPw.status}`);
+  check('xujunyao 可以改其他管理员的密码', primaryAdminPw.status === 200, `实际 ${primaryAdminPw.status}`);
+
+  const mgrLoginNewPw = await fetch(`${BASE}/api/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: 'mgr01', password: 'mgr01pass2' }),
+  });
+  check('被主管理员改过密码的管理员能用新密码登录', mgrLoginNewPw.status === 200, `实际 ${mgrLoginNewPw.status}`);
+  mgrCookie = (mgrLoginNewPw.headers.getSetCookie?.() ?? []).map((c) => c.split(';')[0])[0] || mgrCookie;
 
   const otherReset = await fetch(`${BASE}/api/admin/users/reset-code`, {
     method: 'POST',
@@ -500,6 +515,31 @@ try {
     body: JSON.stringify({ username: 'mgr03', adminCode: 'xujunyaoNB6669' }),
   });
   check('用新的二级密码可以继续授予管理员', grantWithNew.status === 200, `实际 ${grantWithNew.status}`);
+
+  const mgrDemote = await fetch(`${BASE}/api/admin/users/demote`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', cookie: mgrCookie },
+    body: JSON.stringify({ username: 'mgr02', adminCode: 'mgrsecond1' }),
+  });
+  check('普通管理员不能撤销其他管理员', mgrDemote.status === 403, `实际 ${mgrDemote.status}`);
+
+  const demoteWrongCode = await fetch(`${BASE}/api/admin/users/demote`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', cookie: cookieHeader },
+    body: JSON.stringify({ username: 'mgr02', adminCode: 'wrong-code' }),
+  });
+  check('撤销管理员也要二级密码', demoteWrongCode.status === 403, `实际 ${demoteWrongCode.status}`);
+
+  const demoteOk = await fetch(`${BASE}/api/admin/users/demote`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', cookie: cookieHeader },
+    body: JSON.stringify({ username: 'mgr02', adminCode: 'xujunyaoNB6669' }),
+  });
+  check('主管理员可以撤销其他管理员', demoteOk.status === 200, `实际 ${demoteOk.status}`);
+
+  const afterDemote = await fetch(`${BASE}/api/admin/settings`, { headers: { cookie: cookieHeader } }).then((r) => r.json());
+  const mgr02Row = (afterDemote.users || []).find((x) => x.username === 'mgr02');
+  check('被撤销的账号回到普通账号', mgr02Row && mgr02Row.role === 'user', JSON.stringify(mgr02Row));
 
   console.log('\n[12] 退出');
   await fetch(`${BASE}/api/logout`, { method: 'POST', headers: { cookie: cookieHeader } });
