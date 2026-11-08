@@ -146,7 +146,7 @@ try {
   const list2 = await fetch(`${BASE}/api/files`, { headers: { cookie: cookieHeader } }).then((r) => r.json());
   check('删除后剩 1 个文件', list2.count === 1, JSON.stringify(list2.count));
 
-  console.log('\n[6] 多账号与管理员后台');
+  console.log('\n[7] 多账号与管理员后台');
   const regClosed = await fetch(`${BASE}/api/register`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -196,7 +196,101 @@ try {
   const guestAdmin = await fetch(`${BASE}/api/admin/settings`, { headers: { cookie: guestCookie } });
   check('普通账号访问后台返回 403', guestAdmin.status === 403, `实际 ${guestAdmin.status}`);
 
-  console.log('\n[7] 实时改密码');
+  console.log('\n[8] 自助改密码与重置码找回');
+  const regReset = await fetch(`${BASE}/api/register`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: 'reset01', password: 'reset01pass' }),
+  });
+  check('准备测试账号 reset01', regReset.status === 200, `实际 ${regReset.status}`);
+  let resetCookie = (regReset.headers.getSetCookie?.() ?? []).map((c) => c.split(';')[0])[0] || '';
+
+  const selfChange = await fetch(`${BASE}/api/password`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', cookie: resetCookie },
+    body: JSON.stringify({ password: 'selfchanged1' }),
+  });
+  check('普通账号可以自己改密码', selfChange.status === 200, `实际 ${selfChange.status}`);
+  const resetOldSession = await fetch(`${BASE}/api/session`, { headers: { cookie: resetCookie } }).then((r) => r.json());
+  check('普通账号改密码后旧会话失效', resetOldSession.authenticated === false, JSON.stringify(resetOldSession));
+
+  const resetRelogin = await fetch(`${BASE}/api/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: 'reset01', password: 'selfchanged1' }),
+  });
+  check('普通账号新密码立即可以登录', resetRelogin.status === 200, `实际 ${resetRelogin.status}`);
+  resetCookie = (resetRelogin.headers.getSetCookie?.() ?? []).map((c) => c.split(';')[0])[0] || '';
+
+  const adminSelf = await fetch(`${BASE}/api/password`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', cookie: cookieHeader },
+    body: JSON.stringify({ password: 'newpass123' }),
+  });
+  check('管理员也能用自助改密码接口', adminSelf.status === 200, `实际 ${adminSelf.status}`);
+  cookieHeader =
+    (adminSelf.headers.getSetCookie?.() ?? []).map((c) => c.split(';')[0])[0] || cookieHeader;
+
+  const codeRes = await fetch(`${BASE}/api/admin/users/reset-code`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', cookie: cookieHeader },
+    body: JSON.stringify({ username: 'reset01' }),
+  });
+  const codeJson = await codeRes.json();
+  check('管理员可以为普通账号生成重置码', codeRes.status === 200, JSON.stringify(codeJson));
+  check('重置码是 8 位', typeof codeJson.code === 'string' && codeJson.code.length === 8, String(codeJson.code));
+  const resetCode = codeJson.code;
+
+  const adminCode = await fetch(`${BASE}/api/admin/users/reset-code`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', cookie: cookieHeader },
+    body: JSON.stringify({ username: USER }),
+  });
+  check('管理员账号不能生成重置码', adminCode.status === 403, `实际 ${adminCode.status}`);
+
+  const badCode = await fetch(`${BASE}/api/forgot/reset`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: 'reset01', code: 'ZZZZZZZZ', password: 'forgotnew1' }),
+  });
+  check('错误重置码被拒绝', badCode.status === 400, `实际 ${badCode.status}`);
+
+  const goodCode = await fetch(`${BASE}/api/forgot/reset`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: 'reset01', code: resetCode, password: 'forgotnew1' }),
+  });
+  check('用重置码可以自助重置密码', goodCode.status === 200, `实际 ${goodCode.status}`);
+
+  const forgetLogin = await fetch(`${BASE}/api/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: 'reset01', password: 'forgotnew1' }),
+  });
+  check('重置后的密码可以登录', forgetLogin.status === 200, `实际 ${forgetLogin.status}`);
+
+  const reuseCode = await fetch(`${BASE}/api/forgot/reset`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: 'reset01', code: resetCode, password: 'forgotnew2' }),
+  });
+  check('重置码用过就失效', reuseCode.status === 400, `实际 ${reuseCode.status}`);
+
+  const adminForgot = await fetch(`${BASE}/api/forgot/reset`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: USER, code: 'AAAABBBB', password: 'whatever1' }),
+  });
+  check('管理员账号不能用忘记密码', adminForgot.status === 403, `实际 ${adminForgot.status}`);
+
+  const cleanupReset = await fetch(`${BASE}/api/admin/users/delete`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', cookie: cookieHeader },
+    body: JSON.stringify({ username: 'reset01' }),
+  });
+  check('清理测试账号 reset01', cleanupReset.status === 200, `实际 ${cleanupReset.status}`);
+
+  console.log('\n[9] 实时改密码');
   const changePwd = await fetch(`${BASE}/api/admin/password`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', cookie: cookieHeader },
@@ -224,7 +318,7 @@ try {
   check('新密码立即可以登录', newPwdLogin.status === 200, `实际 ${newPwdLogin.status}`);
   cookieHeader = (newPwdLogin.headers.getSetCookie?.() ?? []).map((c) => c.split(';')[0])[0] || newCookie;
 
-  console.log('\n[8] 后台管理账号（重置密码 / 删除）');
+  console.log('\n[10] 后台管理账号（重置密码 / 删除）');
   const resetGuest = await fetch(`${BASE}/api/admin/users/password`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', cookie: cookieHeader },
@@ -288,19 +382,20 @@ try {
   const settingsAfter = await fetch(`${BASE}/api/admin/settings`, { headers: { cookie: cookieHeader } }).then((r) => r.json());
   check('账号列表已只剩管理员', (settingsAfter.users || []).length === 1, JSON.stringify(settingsAfter.users));
 
-  console.log('\n[9] 退出');
+  console.log('\n[11] 退出');
   await fetch(`${BASE}/api/logout`, { method: 'POST', headers: { cookie: cookieHeader } });
   const session2 = await fetch(`${BASE}/api/session`, { headers: { cookie: cookieHeader } }).then((r) => r.json());
   check('退出后会话失效', session2.authenticated === false);
 
-  console.log('\n[10] 页面');
+  console.log('\n[12] 页面');
   const page = await fetch(`${BASE}/`);
   const html = await page.text();
   check('首页返回 200', page.status === 200, `实际 ${page.status}`);
   check('首页包含登录框', html.includes('loginForm'));
 
-  console.log('\n[11] 登录限流');
+  console.log('\n[13] 连续输错密码不再锁定');
   let blockedStatus = 0;
+  let sawLockMessage = false;
   for (let i = 0; i < 6; i += 1) {
     const res = await fetch(`${BASE}/api/login`, {
       method: 'POST',
@@ -308,9 +403,17 @@ try {
       body: JSON.stringify({ username: USER, password: `wrong-${i}` }),
     });
     blockedStatus = res.status;
-    if (res.status === 429) break;
+    const bodyText = await res.text();
+    if (bodyText.includes('尝试次数过多')) sawLockMessage = true;
   }
-  check('连续失败后触发 429 限流', blockedStatus === 429, `实际 ${blockedStatus}`);
+  check('连输 6 次仍然是 401，不出现 429', blockedStatus === 401, `实际 ${blockedStatus}`);
+  check('不再返回「尝试次数过多」提示', sawLockMessage === false, `仍出现提示`);
+  const afterFailLogin = await fetch(`${BASE}/api/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: USER, password: 'newpass123' }),
+  });
+  check('输错多次后正确密码照样能登录', afterFailLogin.status === 200, `实际 ${afterFailLogin.status}`);
 
   exitCode = failed === 0 ? 0 : 1;
 } catch (err) {
