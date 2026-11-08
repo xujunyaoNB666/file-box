@@ -639,6 +639,23 @@ html, body {
   border-color: #e7a8a6;
 }
 
+.user-act.code {
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  letter-spacing: 1px;
+}
+
+.user-code {
+  align-self: flex-start;
+  margin-top: 3px;
+  padding: 2px 7px;
+  border-radius: 6px;
+  background: #eef4ff;
+  color: #0b5cad;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 12px;
+  letter-spacing: 0.5px;
+}
+
 .user-editor {
   flex-basis: 100%;
   display: flex;
