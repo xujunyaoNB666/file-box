@@ -393,6 +393,11 @@ function requireAdmin(req, res, next) {
   next();
 }
 
+/** 主管理员（ADMIN_USER）：允许它改动其他管理员账号 */
+function isPrimaryAdmin(account) {
+  return Boolean(account && account.role === 'admin' && account.username === ADMIN_USER);
+}
+
 /** 修改类请求校验来源，配合 SameSite=Lax 抵御 CSRF */
 function sameOrigin(req, res, next) {
   const origin = req.get('origin') || req.get('referer');
@@ -436,6 +441,7 @@ app.get('/api/session', (req, res) => {
     minPasswordLen: MIN_PASSWORD_LEN,
     minSecondLen: MIN_SECOND_LEN,
     hasSecondPassword: Boolean(user && user.account.codeSalt),
+    primaryAdmin: ADMIN_USER,
   });
 });
 
@@ -652,7 +658,7 @@ app.post('/api/admin/users/password', requireAuth, requireAdmin, sameOrigin, asy
     if (!target) {
       return res.status(404).json({ error: '账号不存在' });
     }
-    if (target.role === 'admin' && target.username !== req.account.username) {
+    if (target.role === 'admin' && target.username !== req.account.username && !isPrimaryAdmin(req.account)) {
       return res.status(403).json({ error: '管理员账号之间不能互相修改密码' });
     }
 
@@ -729,6 +735,47 @@ app.post('/api/admin/users/grant', requireAuth, requireAdmin, sameOrigin, async 
     await saveStore();
 
     return res.json({ ok: true, username: target.username, needSetSecondPassword: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/** 撤销管理员：只有主管理员能做，同样要二级密码；撤销后就变成普通账号 */
+app.post('/api/admin/users/demote', requireAuth, requireAdmin, sameOrigin, async (req, res, next) => {
+  try {
+    const username = typeof req.body?.username === 'string' ? req.body.username.trim().toLowerCase() : '';
+    const adminCode = typeof req.body?.adminCode === 'string' ? req.body.adminCode.trim() : '';
+
+    if (!isPrimaryAdmin(req.account)) {
+      return res.status(403).json({ error: '只有主管理员可以撤销其他管理员' });
+    }
+    if (!req.account.codeSalt) {
+      return res.status(403).json({ error: '你还没有二级密码，请先设置二级密码' });
+    }
+    if (!checkSecondPassword(req.account, adminCode)) {
+      return res.status(403).json({ error: '二级密码不正确' });
+    }
+    if (!USERNAME_RE.test(username)) {
+      return res.status(400).json({ error: '账号格式不对' });
+    }
+
+    const target = findUser(username);
+    if (!target) {
+      return res.status(404).json({ error: '账号不存在' });
+    }
+    if (target.username === req.account.username) {
+      return res.status(400).json({ error: '不能撤销自己' });
+    }
+    if (target.role !== 'admin') {
+      return res.status(400).json({ error: '这个账号本来就不是管理员' });
+    }
+
+    target.role = 'user';
+    target.codeSalt = null;
+    target.codeHash = null;
+    await saveStore();
+
+    return res.json({ ok: true, username: target.username, role: target.role });
   } catch (err) {
     next(err);
   }
