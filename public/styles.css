@@ -597,6 +597,65 @@ html, body {
 
 .user-role { color: var(--muted); font-size: 12px; }
 
+.user-list li.user-row {
+  flex-wrap: wrap;
+  gap: 8px 10px;
+}
+
+.user-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.user-name {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.user-acts {
+  display: flex;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.btn-sm {
+  padding: 5px 10px;
+  font-size: 12px;
+  border-radius: 8px;
+}
+
+.btn-danger {
+  border-color: #f0c2c2;
+  color: #b42318;
+  background: #fff;
+}
+
+.btn-danger:hover {
+  background: #fdf1f0;
+  border-color: #e7a8a6;
+}
+
+.user-editor {
+  flex-basis: 100%;
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  padding-top: 4px;
+}
+
+.user-editor input {
+  flex: 1;
+  min-width: 0;
+  padding: 7px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-size: 13px;
+}
+
 /* ---------------------------------------------------------------- 响应式 */
 
 @media (max-width: 680px) {
