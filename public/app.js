@@ -7,7 +7,10 @@
     files: [],
     query: '',
     maxUploadMb: 512,
-    uploading: 0,
+    minPasswordLen: 6,
+    allowRegister: false,
+    role: null,
+    user: null,
   };
 
   /* ------------------------------------------------------------- 通用工具 */
@@ -56,24 +59,45 @@
 
   /* ------------------------------------------------------------- 视图切换 */
 
+  function syncRegisterEntry() {
+    $('#registerEntry').hidden = !state.allowRegister;
+    $('#registerClosed').hidden = state.allowRegister;
+  }
+
   function showLogin(message) {
     $('#loginView').hidden = false;
     $('#appView').hidden = true;
     $('#topbarActions').hidden = true;
+    $('#adminPanel').hidden = true;
+    $('#loginForm').hidden = false;
+    $('#registerForm').hidden = true;
     $('#loginMsg').textContent = message || '';
+    syncRegisterEntry();
     setTimeout(() => $('#username').focus(), 60);
   }
 
-  function showApp(user) {
+  function showRegister() {
+    $('#loginForm').hidden = true;
+    $('#registerForm').hidden = false;
+    $('#registerMsg').textContent = '';
+    setTimeout(() => $('#regUsername').focus(), 60);
+  }
+
+  function showApp(user, role) {
+    state.user = user;
+    state.role = role || 'user';
     $('#loginView').hidden = true;
     $('#appView').hidden = false;
     $('#topbarActions').hidden = false;
-    $('#userChip').textContent = user;
+    $('#userChip').textContent = state.role === 'admin' ? `${user}（管理员）` : user;
+    $('#adminBtn').hidden = state.role !== 'admin';
+    $('#adminPanel').hidden = true;
+    $('#listTitle').textContent = state.role === 'admin' ? '全部文件' : '我的文件';
     $('#dzHint').textContent = `单个文件不超过 ${state.maxUploadMb} MB，支持一次选择多个文件`;
     loadFiles();
   }
 
-  /* ------------------------------------------------------------- 登录 / 退出 */
+  /* ------------------------------------------------------------- 登录 / 注册 */
 
   $('#loginForm').addEventListener('submit', async (event) => {
     event.preventDefault();
@@ -97,12 +121,51 @@
         body: JSON.stringify({ username, password }),
       });
       $('#loginForm').reset();
-      showApp(data.user || username);
+      showApp(data.user || username, data.role);
     } catch (err) {
       msg.textContent = err.message || '登录失败';
     } finally {
       btn.disabled = false;
       btn.textContent = '登录';
+    }
+  });
+
+  $('#toRegister').addEventListener('click', showRegister);
+  $('#toLogin').addEventListener('click', () => showLogin());
+
+  $('#registerForm').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const username = $('#regUsername').value.trim();
+    const password = $('#regPassword').value;
+    const btn = $('#registerBtn');
+    const msg = $('#registerMsg');
+
+    if (!username || !password) {
+      msg.textContent = '请输入账号和密码';
+      return;
+    }
+    if (password.length < state.minPasswordLen) {
+      msg.textContent = `密码至少 ${state.minPasswordLen} 位`;
+      return;
+    }
+
+    btn.disabled = true;
+    btn.textContent = '注册中…';
+    msg.textContent = '';
+    try {
+      const data = await request('/api/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password }),
+      });
+      $('#registerForm').reset();
+      showApp(data.user || username, data.role);
+      toast('注册成功，已自动登录');
+    } catch (err) {
+      msg.textContent = err.message || '注册失败';
+    } finally {
+      btn.disabled = false;
+      btn.textContent = '注册并登录';
     }
   });
 
@@ -113,6 +176,7 @@
       /* 忽略退出失败 */
     }
     state.files = [];
+    state.role = null;
     $('#fileBody').innerHTML = '';
     showLogin('已退出登录');
   });
@@ -153,7 +217,7 @@
       empty.hidden = false;
       empty.textContent = query
         ? `没有匹配「${state.query.trim()}」的文件`
-        : '还没有文件。管理员可以在上方拖拽上传。';
+        : '还没有文件，拖拽或点击上方选择文件即可上传。';
       return;
     }
     empty.hidden = true;
@@ -174,6 +238,10 @@
       name.title = file.name;
       nameWrap.append(badge, name);
       tdName.append(nameWrap);
+
+      const tdOwner = document.createElement('td');
+      tdOwner.className = 'dim col-owner';
+      tdOwner.textContent = file.owner || '';
 
       const tdSize = document.createElement('td');
       tdSize.className = 'dim col-size';
@@ -202,7 +270,7 @@
       actWrap.append(dl, del);
       tdAct.append(actWrap);
 
-      tr.append(tdName, tdSize, tdDate, tdAct);
+      tr.append(tdName, tdOwner, tdSize, tdDate, tdAct);
       frag.append(tr);
     }
     body.append(frag);
@@ -376,13 +444,101 @@
     xhr.send(form);
   }
 
+  /* ------------------------------------------------------------- 管理员后台 */
+
+  $('#adminBtn').addEventListener('click', async () => {
+    const panel = $('#adminPanel');
+    panel.hidden = !panel.hidden;
+    if (!panel.hidden) await loadAdminSettings();
+  });
+
+  $('#adminClose').addEventListener('click', () => {
+    $('#adminPanel').hidden = true;
+  });
+
+  async function loadAdminSettings() {
+    try {
+      const data = await request('/api/admin/settings');
+      state.allowRegister = Boolean(data.allowRegister);
+      $('#allowRegister').checked = state.allowRegister;
+      $('#settingMsg').textContent = state.allowRegister ? '当前：允许任何人注册' : '当前：注册入口已关闭';
+      const list = $('#userList');
+      list.innerHTML = '';
+      for (const u of data.users || []) {
+        const li = document.createElement('li');
+        const name = document.createElement('span');
+        name.textContent = u.username;
+        const role = document.createElement('span');
+        role.className = 'user-role';
+        role.textContent =
+          (u.role === 'admin' ? '管理员' : '普通账号') + (u.files ? ` · ${u.files} 个文件` : '');
+        li.append(name, role);
+        list.append(li);
+      }
+    } catch (err) {
+      if (err.status === 401) return showLogin('登录已过期，请重新登录');
+      $('#settingMsg').textContent = err.message || '读取设置失败';
+    }
+  }
+
+  $('#allowRegister').addEventListener('change', async (event) => {
+    const value = event.target.checked;
+    const msg = $('#settingMsg');
+    try {
+      const data = await request('/api/admin/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ allowRegister: value }),
+      });
+      state.allowRegister = Boolean(data.allowRegister);
+      msg.textContent = state.allowRegister ? '已开启：任何人现在都能注册' : '已关闭：注册入口失效';
+      toast(state.allowRegister ? '已开放注册' : '已关闭注册');
+    } catch (err) {
+      event.target.checked = !value;
+      msg.textContent = err.message || '修改失败';
+      toast(err.message || '修改失败', true);
+    }
+  });
+
+  $('#savePassword').addEventListener('click', async () => {
+    const input = $('#newPassword');
+    const msg = $('#passwordMsg');
+    const password = input.value;
+
+    if (password.length < state.minPasswordLen) {
+      msg.textContent = `密码至少 ${state.minPasswordLen} 位`;
+      return;
+    }
+
+    const btn = $('#savePassword');
+    btn.disabled = true;
+    btn.textContent = '保存中…';
+    try {
+      await request('/api/admin/password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password }),
+      });
+      input.value = '';
+      msg.textContent = '密码已更新，立即生效';
+      toast('密码已更新');
+    } catch (err) {
+      msg.textContent = err.message || '修改失败';
+    } finally {
+      btn.disabled = false;
+      btn.textContent = '保存新密码';
+    }
+  });
+
   /* ------------------------------------------------------------- 启动 */
 
   (async function boot() {
     try {
       const session = await request('/api/session');
       state.maxUploadMb = session.maxUploadMb || state.maxUploadMb;
-      if (session.authenticated) showApp(session.user || '管理员');
+      state.minPasswordLen = session.minPasswordLen || state.minPasswordLen;
+      state.allowRegister = Boolean(session.allowRegister);
+      if (session.authenticated) showApp(session.user || '管理员', session.role);
       else showLogin();
     } catch {
       showLogin('无法连接服务器');
