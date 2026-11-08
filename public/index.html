@@ -171,8 +171,25 @@
       </div>
 
       <div class="admin-block">
+        <h3>我的二级密码</h3>
+        <p class="meta">只有管理员有二级密码，授予他人管理员时必须验证。修改二级密码要先输入旧的；还没设置过的账号第一次可以留空。</p>
+        <div class="admin-grid">
+          <label class="field">
+            <span>旧的二级密码</span>
+            <input id="oldSecond" type="password" autocomplete="off" placeholder="首次设置可留空">
+          </label>
+          <label class="field">
+            <span>新的二级密码</span>
+            <input id="newSecond" type="password" autocomplete="new-password" minlength="6">
+          </label>
+          <button class="btn btn-primary" id="saveSecond" type="button">保存二级密码</button>
+        </div>
+        <p class="form-msg" id="secondMsg" role="status"></p>
+      </div>
+
+      <div class="admin-block">
         <h3>已注册账号</h3>
-        <p class="meta">「重置码」给忘记密码的人用：对方在登录页点「忘记密码」填进去就能自己设新密码，30 分钟有效、用一次就作废</p>
+        <p class="meta">「重置码」给忘记密码的人用：对方在登录页点「忘记密码」填进去就能自己设新密码，30 分钟有效、用一次就作废。管理员账号之间不能互相修改，只能改自己。</p>
         <ul class="user-list" id="userList"></ul>
       </div>
     </div>
