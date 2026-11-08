@@ -1,6 +1,6 @@
 # FileBox · 私有文件下载站
 
-一个可以**在 GitHub 上一键部署**的文件下载服务：单个账号登录 → 上传/管理文件 → 任何人登录后即可下载。
+一个可以**在 GitHub 上一键部署**的文件下载服务：管理员 + 注册账号，各自独立空间 → 上传/管理自己的文件 → 登录后下载自己的文件（管理员可看全部）。
 后端是零外部依赖的 Node + Express，自带 Dockerfile 和 Render 蓝图，可以扔掉服务器运维那套东西。
 
 ```
@@ -13,7 +13,10 @@
 
 | 能力 | 说明 |
 | --- | --- |
-| 账号登录 | 用户名 + 密码，服务端签发 HttpOnly 会话 Cookie，登录态默认 12 小时 |
+| 多账号 | 管理员 + 普通账号，**每个账号只看得见自己上传的文件**；管理员额外看到全部 |
+| 注册开关 | 网页后台一键开关，默认关闭；打开后访客可自助注册（账号各自独立空间） |
+| 实时改密码 | 后台直接改管理员密码，保存即生效、旧登录状态立刻失效，无需重启服务 |
+| 账号登录 | 用户名 + 密码（scrypt 加盐存储），服务端签发 HttpOnly 会话 Cookie，登录态默认 12 小时 |
 | 文件下载 | 列表 + 搜索 + 一键下载，保留中文/原始文件名，支持断点续传（Range） |
 | 上传管理 | 拖拽或点选，多文件上传、带进度条、重名自动加 `(1)` 后缀 |
 | 删除文件 | 列表内直接删除，二次确认 |
@@ -22,65 +25,35 @@
 
 ## 一键部署
 
-### 方式 A：ClawCloud Run（免费额度，免信用卡，镜像部署）
+### 方式 A：Render（推荐，有免费额度）
 
-GitHub Actions 已经把镜像构建好推到 GHCR（见 `.github/workflows/publish-image.yml`，每次推 `main` 自动更新），所以这里只需要填一个镜像地址。
-
-**前置一步**：首次使用要把该镜像包设为公开——仓库主页右侧 `Packages` → `file-box` → `Package settings` → 页面底部 `Change visibility` → 选 `Public` → 按提示输入包名确认。
-
-1. 打开 <https://run.claw.cloud>，用 GitHub 账号登录（永久每月 $5 免费额度，无需信用卡；要求 GitHub 账号注册满 6 个月）。
-2. 左上角区域选 **Singapore**（离得近，延迟低）。
-3. 点 **App Launchpad** → 右上角 **Create App**，按下面填：
-
-   | 字段 | 值 |
-   | --- | --- |
-   | Application Name | `file-box` |
-   | Image | `Public` → `ghcr.io/xujunyaonb666/file-box:latest` |
-   | Usage / Replicas | `Fixed` / `1` |
-   | CPU / Memory | `1` / `512M` |
-   | Container Port | `3000` |
-   | Public Access | 打开 |
-   | Environment Variables | 见下表 |
-   | Local Storage | `1G`，Mount Path 填 `/data` |
-
-   环境变量：
-
-   ```
-   ADMIN_USER=xujunyao
-   ADMIN_PASSWORD=shenye128
-   SESSION_SECRET=<一串随机字符，可用 openssl rand -hex 32 生成>
-   DATA_DIR=/data
-   SESSION_TTL_HOURS=12
-   MAX_UPLOAD_MB=512
-   ```
-
-4. 点 **Deploy Application**，等 Public Address 变绿，拿到形如 `https://xxxx.region.clawcloudrun.com` 的地址，打开就是登录页。
-
-> `SESSION_SECRET` 一定要填且固定，不填每次重启都会随机生成、所有人被登出。
-> 免费实例不稳定、可能被重排，重要文件请自己留底。
-
-### 方式 B：Render（有免费额度）
-
-1. 用 GitHub 账号登录 Render，打开：
+1. **把本项目推到 GitHub**
+   - 有 git：`git init && git add -A && git commit -m "init" && git push`
+   - **没有 git**：在 GitHub 网页上新建仓库 → 点 `Add file → Upload files` → 把本目录里除 `node_modules/`、`storage/`、`.env` 之外的文件全部拖进去 → Commit。（GitHub 网页上传不会自动带上点开头的配置文件，`.gitignore`、`.env.example`、`.github/` 可以之后按需补，不影响部署）
+2. **整理成下面这个链接**（把 `<用户名>/<仓库名>` 换成你的）：
 
    ```
    https://render.com/deploy?repo=https://github.com/<用户名>/<仓库名>
    ```
 
-2. Render 自动读取仓库里的 `render.yaml`，直接确认创建，不用填配置。
-3. 一两分钟后拿到 `https://file-box-xxxx.onrender.com`。
-4. 免费实例闲置约 15 分钟休眠，下次访问要 30–60 秒冷启动。
+3. 用 GitHub 账号登录 Render，打开上面这个链接 → Render 会自动读取仓库里的 `render.yaml` → 直接确认创建，**不用填任何配置**。
+4. 一两分钟后拿到形如 `https://file-box-xxxx.onrender.com` 的地址，打开就是登录页。
 
-> 部分地区网络可能打不开 render.com，遇到就别走这条路。
+> 初始账号：`xujunyao`　密码：`shenye128`
+> 登录后点右上角「管理」，可以直接改密码（即时生效，不用重启服务），也能打开/关闭注册入口。
 
-### 方式 C：Railway / Sealos / 任何支持 Dockerfile 的平台
+> 免费实例闲置约 15 分钟后会休眠，下次访问需要 30–60 秒冷启动（页面会转一会儿才出来，属正常现象），要一直在线就升级成 Starter。
+
+### 方式 B：Railway / Zeabur / Sealos 等任意支持 Docker 的平台
+
+这些平台都认 Dockerfile，流程一致：
 
 1. 新建项目 → 选择 `Deploy from GitHub repo` → 选中本仓库；
 2. 平台自动识别 `Dockerfile` 构建；
-3. 环境变量里补上 `ADMIN_USER`、`ADMIN_PASSWORD`、`SESSION_SECRET`；
-4. 挂一个持久卷到 `/data`（不挂就是重启丢文件）。
+3. 在环境变量里补上 `ADMIN_USER`、`ADMIN_PASSWORD`、`SESSION_SECRET`；
+4. 挂载一个持久卷到 `/data`（可选，不挂就是重启丢文件）。
 
-### 方式 D：自己的服务器 / 本地 Docker
+### 方式 C：自己的服务器 / 本地 Docker
 
 ```bash
 docker build -t file-box .
@@ -112,7 +85,8 @@ npm test           # 冒烟测试：登录/上传/列表/下载/删除/退出全
 | `PORT` | `3000` | 监听端口 |
 | `DATA_DIR` | `./storage` | 文件存储目录；容器内建议 `/data` |
 | `ADMIN_USER` | `xujunyao` | 登录账号 |
-| `ADMIN_PASSWORD` | `shenye128` | 登录密码，**线上务必改掉** |
+| `ADMIN_PASSWORD` | `shenye128` | 初始管理员密码，**只在账号文件不存在时生效**；之后改密码请用网页后台 |
+| `USERS_FILE` | `DATA_DIR/.users.json` | 账号与注册开关的存储文件（含密码哈希，不进 Git） |
 | `SESSION_SECRET` | 每次启动随机 | 会话签名密钥；不固定的话重启后需要重新登录 |
 | `SESSION_TTL_HOURS` | `12` | 登录有效期（小时） |
 | `MAX_UPLOAD_MB` | `512` | 单文件大小上限 |
@@ -143,6 +117,10 @@ npm test           # 冒烟测试：登录/上传/列表/下载/删除/退出全
 | `GET` | `/healthz` | 健康检查 |
 | `GET` | `/api/session` | 当前登录状态 |
 | `POST` | `/api/login` | `{username, password}` 登录 |
+| `POST` | `/api/register` | `{username, password}` 注册，仅在后台开启注册时可用 |
+| `GET` | `/api/admin/settings` | 后台设置与账号列表（需管理员） |
+| `POST` | `/api/admin/settings` | `{allowRegister}` 开关注册入口（需管理员） |
+| `POST` | `/api/admin/password` | `{password}` 实时改管理员密码，旧会话立即失效（需管理员） |
 | `POST` | `/api/logout` | 退出并吊销会话 |
 | `GET` | `/api/files` | 文件列表（需登录） |
 | `POST` | `/api/upload` | `multipart/form-data`，字段名 `files`，可多文件（需登录） |
@@ -164,13 +142,20 @@ npm test           # 冒烟测试：登录/上传/列表/下载/删除/退出全
 ├── Dockerfile                # 任意容器平台可用
 ├── render.yaml               # Render 一键部署蓝图
 ├── .env.example
-├── .github/workflows/ci.yml        # 测试工作流（推送它需要带 workflow 权限的令牌）
-├── .github/workflows/publish-image.yml  # 构建镜像并推送到 GHCR
-└── storage/                  # 运行时生成，存文件（不进 Git）
+├── （可选）.github/workflows/ci.yml   # 测试工作流，推送它需要带 workflow 权限的令牌
+└── storage/                  # 运行时生成：<用户名>/ 存文件，.users.json 存账号（不进 Git）
 ```
+
+## 账号与空间（多用户）
+
+- **存储布局**：`DATA_DIR/<用户名>/<文件名>`，一人一个目录。老版本平铺在 `DATA_DIR` 根目录的文件会在管理员第一次打开列表时**自动搬进管理员目录**，不会丢。
+- **可见性**：普通账号只能读写自己目录里的文件，下载别人的文件 id 直接 404；管理员列表带「所属账号」列，可下载/删除所有人的文件。
+- **账号数据**：`DATA_DIR/.users.json`（默认），密码用 `scrypt` 加盐哈希保存，文件权限 `0600`。它跟随 `DATA_DIR` 走，挂持久卷就会一直保留；`storage/` 已在 `.gitignore`，不会误传进 Git。
+- **注册入口**：默认关闭。后台打开后任何人可自助注册，新账号天生带独立空目录；关掉后接口立即返回 403，已注册账号不受影响。
+- **改密码**：后台「修改我的密码」保存即生效——老密码立即失效，其它设备上的会话全部作废，当前浏览器会自动重新签发。
 
 ## 安全边界（说清楚不装）
 
-这版做的是**单账号门禁**，不是多用户体系：只有一套账号密码，登录的人都能上传/删除。要多人分权、审计日志、分享链接有效期，需要另外加。
+这版是**多账号 + 独立空间**，但不是企业级权限系统：没有账号审批、没有邀请码、没有按文件分享链接与有效期、没有审计日志。管理员能看全部文件，普通账号看不到别人的。要更强的管控再加。
 
-密码通过环境变量下发、比对用常量时间比较，但**默认密码写在 `render.yaml` 里只是为了开箱即用**，公开仓库请务必改成自己的密码（或改成 Render 部署时手动填写）。
+默认密码写在 `render.yaml` / `.env.example` 里只是为了开箱即用，**公开仓库请务必改成自己的密码**，或登录后立刻在后台改掉。
