@@ -504,6 +504,67 @@ app.post('/api/admin/password', requireAuth, requireAdmin, sameOrigin, async (re
   }
 });
 
+/** 管理员重置指定账号的密码：该账号的旧密码与旧会话立即失效 */
+app.post('/api/admin/users/password', requireAuth, requireAdmin, sameOrigin, async (req, res, next) => {
+  try {
+    const username = typeof req.body?.username === 'string' ? req.body.username.trim().toLowerCase() : '';
+    const password = typeof req.body?.password === 'string' ? req.body.password : '';
+    if (!USERNAME_RE.test(username)) {
+      return res.status(400).json({ error: '账号不存在' });
+    }
+    if (password.length < MIN_PASSWORD_LEN) {
+      return res.status(400).json({ error: `密码至少 ${MIN_PASSWORD_LEN} 位` });
+    }
+
+    const target = findUser(username);
+    if (!target) {
+      return res.status(404).json({ error: '账号不存在' });
+    }
+
+    const fresh = hashPassword(password);
+    target.salt = fresh.salt;
+    target.hash = fresh.hash;
+    target.pv = Number(target.pv || 0) + 1;
+    await saveStore();
+
+    const self = target.username === req.account.username;
+    if (self) issueSession(res, target);
+    return res.json({ ok: true, username: target.username, self });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/** 删除账号并清空它的文件目录；管理员账号与当前登录账号不允许删除 */
+app.post('/api/admin/users/delete', requireAuth, requireAdmin, sameOrigin, async (req, res, next) => {
+  try {
+    const username = typeof req.body?.username === 'string' ? req.body.username.trim().toLowerCase() : '';
+    if (!USERNAME_RE.test(username)) {
+      return res.status(400).json({ error: '账号不存在' });
+    }
+
+    const target = findUser(username);
+    if (!target) {
+      return res.status(404).json({ error: '账号不存在' });
+    }
+    if (target.role === 'admin' || target.username === req.account.username) {
+      return res.status(403).json({ error: '管理员账号不能删除' });
+    }
+
+    const dir = userDir(target.username);
+    const entries = await fsp.readdir(dir, { withFileTypes: true }).catch(() => []);
+    const removed = entries.filter((e) => e.isFile() && !e.name.startsWith('.')).length;
+    await fsp.rm(dir, { recursive: true, force: true }).catch(() => {});
+
+    store.users = store.users.filter((u) => u.username !== target.username);
+    await saveStore();
+
+    return res.json({ ok: true, username: target.username, removed });
+  } catch (err) {
+    next(err);
+  }
+});
+
 /* ---------------------------------------------------------------- 文件接口 */
 
 async function listForAccount(account) {
