@@ -592,15 +592,25 @@
         acts.className = 'user-acts';
 
         const isSelf = u.username === state.user;
+        const isPrimaryActor = state.role === 'admin' && state.user === state.primaryAdmin;
 
-        /* 别的管理员不能互相改，所以只有非管理员和本人能改自己的密码 */
-        if (!isAdmin || isSelf) {
+        /* 别的管理员之间不能互改，但主管理员可以改其他管理员 */
+        if (!isAdmin || isSelf || isPrimaryActor) {
           const pwBtn = document.createElement('button');
           pwBtn.type = 'button';
           pwBtn.className = 'btn btn-ghost btn-sm';
           pwBtn.textContent = '改密码';
           pwBtn.addEventListener('click', () => openUserPwEditor(li, u));
           acts.append(pwBtn);
+        }
+
+        if (isAdmin && !isSelf && isPrimaryActor) {
+          const demoteBtn = document.createElement('button');
+          demoteBtn.type = 'button';
+          demoteBtn.className = 'btn btn-danger btn-sm';
+          demoteBtn.textContent = '撤销管理员';
+          demoteBtn.addEventListener('click', () => openDemoteEditor(li, u));
+          acts.append(demoteBtn);
         }
 
         if (!isAdmin) {
@@ -674,6 +684,55 @@
             loadAdminSettings();
           } catch (err) {
             toast(err.message || '修改失败', true);
+          } finally {
+            save.disabled = false;
+          }
+        });
+
+        box.append(input, save, cancel);
+        li.append(box);
+        input.focus();
+      }
+
+      function openDemoteEditor(li, u) {
+        if (li.querySelector('.user-editor')) return;
+        const box = document.createElement('div');
+        box.className = 'user-editor';
+
+        const input = document.createElement('input');
+        input.type = 'password';
+        input.autocomplete = 'off';
+        input.placeholder = '你的二级密码（撤销需要验证）';
+
+        const save = document.createElement('button');
+        save.type = 'button';
+        save.className = 'btn btn-danger btn-sm';
+        save.textContent = '确认撤销';
+
+        const cancel = document.createElement('button');
+        cancel.type = 'button';
+        cancel.className = 'btn btn-ghost btn-sm';
+        cancel.textContent = '取消';
+        cancel.addEventListener('click', () => box.remove());
+
+        save.addEventListener('click', async () => {
+          const adminCode = input.value.trim();
+          if (!adminCode) {
+            toast('请输入你的二级密码', true);
+            return;
+          }
+          save.disabled = true;
+          try {
+            await request('/api/admin/users/demote', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ username: u.username, adminCode }),
+            });
+            box.remove();
+            toast(`${u.username} 已改回普通账号`);
+            loadAdminSettings();
+          } catch (err) {
+            toast(err.message || '撤销失败', true);
           } finally {
             save.disabled = false;
           }
@@ -874,6 +933,7 @@
       state.minPasswordLen = session.minPasswordLen || state.minPasswordLen;
       state.allowRegister = Boolean(session.allowRegister);
       state.hasSecondPassword = Boolean(session.hasSecondPassword);
+      state.primaryAdmin = session.primaryAdmin || null;
       if (session.authenticated) showApp(session.user || '管理员', session.role);
       else showLogin();
     } catch {
