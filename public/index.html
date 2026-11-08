@@ -24,6 +24,7 @@
     </div>
     <div class="topbar-actions" id="topbarActions" hidden>
       <span class="user-chip" id="userChip"></span>
+      <button class="btn btn-ghost" id="adminBtn" type="button" hidden>管理</button>
       <button class="btn btn-ghost" id="logoutBtn" type="button">退出</button>
     </div>
   </header>
@@ -31,7 +32,7 @@
   <section id="loginView" class="login-wrap">
     <form class="card login-card" id="loginForm">
       <h2>登录</h2>
-      <p class="hint">登录后即可浏览并下载全部文件</p>
+      <p class="hint">登录后即可浏览并下载自己的文件</p>
       <label class="field">
         <span>账号</span>
         <input id="username" type="text" autocomplete="username" autocapitalize="off" spellcheck="false" required>
@@ -42,6 +43,28 @@
       </label>
       <button class="btn btn-primary btn-block" id="loginBtn" type="submit">登录</button>
       <p class="form-msg" id="loginMsg" role="status"></p>
+      <p class="switch-line" id="registerEntry" hidden>
+        还没有账号？<button type="button" class="link" id="toRegister">注册一个</button>
+      </p>
+      <p class="switch-line" id="registerClosed" hidden>管理员暂未开放注册</p>
+    </form>
+
+    <form class="card login-card" id="registerForm" hidden>
+      <h2>注册账号</h2>
+      <p class="hint">注册后你会有独立的文件空间，看不到别人的文件</p>
+      <label class="field">
+        <span>账号</span>
+        <input id="regUsername" type="text" autocomplete="username" autocapitalize="off" spellcheck="false" placeholder="2-24 位字母、数字、下划线" required>
+      </label>
+      <label class="field">
+        <span>密码</span>
+        <input id="regPassword" type="password" autocomplete="new-password" minlength="6" required>
+      </label>
+      <button class="btn btn-primary btn-block" id="registerBtn" type="submit">注册并登录</button>
+      <p class="form-msg" id="registerMsg" role="status"></p>
+      <p class="switch-line">
+        已有账号？<button type="button" class="link" id="toLogin">去登录</button>
+      </p>
     </form>
   </section>
 
@@ -49,7 +72,7 @@
     <div class="panel">
       <div class="panel-head">
         <div>
-          <h2>全部文件</h2>
+          <h2 id="listTitle">我的文件</h2>
           <p class="meta" id="listMeta">正在加载…</p>
         </div>
         <div class="head-actions">
@@ -73,6 +96,7 @@
           <thead>
             <tr>
               <th>文件名</th>
+              <th class="col-owner">所属账号</th>
               <th class="col-size">大小</th>
               <th class="col-date">上传时间</th>
               <th class="col-act">操作</th>
@@ -83,9 +107,53 @@
       </div>
       <div class="empty" id="emptyState" hidden></div>
     </div>
+
+    <div class="panel admin-panel" id="adminPanel" hidden>
+      <div class="panel-head">
+        <div>
+          <h2>管理员设置</h2>
+          <p class="meta">改动立即生效，不用重启服务</p>
+        </div>
+        <div class="head-actions">
+          <button class="btn btn-ghost" id="adminClose" type="button">收起</button>
+        </div>
+      </div>
+
+      <div class="admin-block">
+        <div class="admin-row">
+          <div>
+            <h3>开放注册</h3>
+            <p class="meta">打开后任何人都能自己注册账号；关掉后注册入口立即失效</p>
+          </div>
+          <label class="switch">
+            <input type="checkbox" id="allowRegister">
+            <span class="switch-track"></span>
+          </label>
+        </div>
+        <p class="form-msg" id="settingMsg" role="status"></p>
+      </div>
+
+      <div class="admin-block">
+        <h3>修改我的密码</h3>
+        <p class="meta">保存后立刻生效，其它设备上的登录状态会失效</p>
+        <div class="admin-grid">
+          <label class="field">
+            <span>新密码</span>
+            <input id="newPassword" type="password" autocomplete="new-password" minlength="6">
+          </label>
+          <button class="btn btn-primary" id="savePassword" type="button">保存新密码</button>
+        </div>
+        <p class="form-msg" id="passwordMsg" role="status"></p>
+      </div>
+
+      <div class="admin-block">
+        <h3>已注册账号</h3>
+        <ul class="user-list" id="userList"></ul>
+      </div>
+    </div>
   </section>
 
-  <footer class="foot">FileBox · 单账号私有文件站</footer>
+  <footer class="foot">FileBox · 私有文件站</footer>
 </div>
 
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
