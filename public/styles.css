@@ -494,6 +494,109 @@ html, body {
 .toast.show { opacity: 1; transform: translate(-50%, 0); }
 .toast.bad { background: var(--danger); }
 
+/* ---------------------------------------------------------------- 注册与后台 */
+
+.switch-line {
+  margin: 14px 0 0;
+  text-align: center;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.col-owner { width: 120px; }
+
+.admin-panel { margin-top: 18px; }
+
+.admin-block + .admin-block {
+  margin-top: 8px;
+  padding-top: 18px;
+  border-top: 1px solid var(--line);
+}
+
+.admin-block h3 {
+  margin: 0 0 4px;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.admin-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.switch {
+  position: relative;
+  display: inline-flex;
+  flex: none;
+}
+
+.switch input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.switch-track {
+  width: 46px;
+  height: 26px;
+  border-radius: 999px;
+  background: #d0d5dd;
+  transition: background 0.16s ease;
+  position: relative;
+  display: block;
+}
+
+.switch-track::after {
+  content: '';
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.2);
+  transition: transform 0.16s ease;
+}
+
+.switch input:checked + .switch-track { background: var(--accent); }
+.switch input:checked + .switch-track::after { transform: translateX(20px); }
+.switch input:focus-visible + .switch-track { outline: 2px solid var(--accent-soft); }
+
+.admin-grid {
+  display: flex;
+  gap: 12px;
+  align-items: flex-end;
+  margin-top: 10px;
+  flex-wrap: wrap;
+}
+
+.admin-grid .field { flex: 1; min-width: 180px; margin: 0; }
+
+.user-list {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.user-list li {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 9px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  font-size: 13px;
+}
+
+.user-role { color: var(--muted); font-size: 12px; }
+
 /* ---------------------------------------------------------------- 响应式 */
 
 @media (max-width: 680px) {
@@ -501,7 +604,7 @@ html, body {
   .panel { padding: 18px 16px 6px; }
   .head-actions { width: 100%; }
   .search { flex: 1; width: auto; }
-  .col-size, .col-date { display: none; }
+  .col-size, .col-date, .col-owner { display: none; }
   .col-act { width: 118px; }
   .btn-download { padding: 6px 9px; }
   .dropzone { padding: 14px; }
