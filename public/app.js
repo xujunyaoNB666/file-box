@@ -466,14 +466,113 @@
       list.innerHTML = '';
       for (const u of data.users || []) {
         const li = document.createElement('li');
+        li.className = 'user-row';
+        const isAdmin = u.role === 'admin';
+
+        const main = document.createElement('div');
+        main.className = 'user-main';
         const name = document.createElement('span');
+        name.className = 'user-name';
         name.textContent = u.username;
         const role = document.createElement('span');
         role.className = 'user-role';
-        role.textContent =
-          (u.role === 'admin' ? '管理员' : '普通账号') + (u.files ? ` · ${u.files} 个文件` : '');
-        li.append(name, role);
+        role.textContent = (isAdmin ? '管理员' : '普通账号') + (u.files ? ` · ${u.files} 个文件` : '');
+        main.append(name, role);
+
+        const acts = document.createElement('div');
+        acts.className = 'user-acts';
+
+        const pwBtn = document.createElement('button');
+        pwBtn.type = 'button';
+        pwBtn.className = 'btn btn-ghost btn-sm';
+        pwBtn.textContent = '改密码';
+        pwBtn.addEventListener('click', () => openUserPwEditor(li, u));
+        acts.append(pwBtn);
+
+        if (!isAdmin) {
+          const delBtn = document.createElement('button');
+          delBtn.type = 'button';
+          delBtn.className = 'btn btn-danger btn-sm';
+          delBtn.textContent = '删除';
+          delBtn.addEventListener('click', () => deleteUser(u, li));
+          acts.append(delBtn);
+        }
+
+        li.append(main, acts);
         list.append(li);
+      }
+
+      function openUserPwEditor(li, u) {
+        if (li.querySelector('.user-editor')) return;
+        const box = document.createElement('div');
+        box.className = 'user-editor';
+
+        const input = document.createElement('input');
+        input.type = 'password';
+        input.autocomplete = 'new-password';
+        input.minLength = state.minPasswordLen;
+        input.placeholder = `新密码（至少 ${state.minPasswordLen} 位）`;
+
+        const save = document.createElement('button');
+        save.type = 'button';
+        save.className = 'btn btn-primary btn-sm';
+        save.textContent = '保存';
+
+        const cancel = document.createElement('button');
+        cancel.type = 'button';
+        cancel.className = 'btn btn-ghost btn-sm';
+        cancel.textContent = '取消';
+        cancel.addEventListener('click', () => box.remove());
+
+        save.addEventListener('click', async () => {
+          const password = input.value;
+          if (password.length < state.minPasswordLen) {
+            toast(`密码至少 ${state.minPasswordLen} 位`, true);
+            return;
+          }
+          save.disabled = true;
+          try {
+            const res = await request('/api/admin/users/password', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ username: u.username, password }),
+            });
+            box.remove();
+            if (res && res.self) {
+              toast('密码已更新，其他设备需重新登录');
+            } else {
+              toast(`${u.username} 的密码已更新`);
+            }
+            loadAdminSettings();
+          } catch (err) {
+            toast(err.message || '修改失败', true);
+          } finally {
+            save.disabled = false;
+          }
+        });
+
+        box.append(input, save, cancel);
+        li.append(box);
+        input.focus();
+      }
+
+      async function deleteUser(u, li) {
+        const ok = window.confirm(
+          `确定删除账号「${u.username}」？\n它的 ${u.files || 0} 个文件会一起删除，无法恢复。`,
+        );
+        if (!ok) return;
+        try {
+          const res = await request('/api/admin/users/delete', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username: u.username }),
+          });
+          li.remove();
+          toast(`已删除账号 ${res.username}${res.removed ? `（含 ${res.removed} 个文件）` : ''}`);
+          await loadFiles();
+        } catch (err) {
+          toast(err.message || '删除失败', true);
+        }
       }
     } catch (err) {
       if (err.status === 401) return showLogin('登录已过期，请重新登录');
