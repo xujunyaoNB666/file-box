@@ -591,14 +591,26 @@
         const acts = document.createElement('div');
         acts.className = 'user-acts';
 
-        const pwBtn = document.createElement('button');
-        pwBtn.type = 'button';
-        pwBtn.className = 'btn btn-ghost btn-sm';
-        pwBtn.textContent = '改密码';
-        pwBtn.addEventListener('click', () => openUserPwEditor(li, u));
-        acts.append(pwBtn);
+        const isSelf = u.username === state.user;
+
+        /* 别的管理员不能互相改，所以只有非管理员和本人能改自己的密码 */
+        if (!isAdmin || isSelf) {
+          const pwBtn = document.createElement('button');
+          pwBtn.type = 'button';
+          pwBtn.className = 'btn btn-ghost btn-sm';
+          pwBtn.textContent = '改密码';
+          pwBtn.addEventListener('click', () => openUserPwEditor(li, u));
+          acts.append(pwBtn);
+        }
 
         if (!isAdmin) {
+          const grantBtn = document.createElement('button');
+          grantBtn.type = 'button';
+          grantBtn.className = 'btn btn-ghost btn-sm';
+          grantBtn.textContent = '授予管理员';
+          grantBtn.addEventListener('click', () => openGrantEditor(li, u));
+          acts.append(grantBtn);
+
           const codeBtn = document.createElement('button');
           codeBtn.type = 'button';
           codeBtn.className = 'btn btn-ghost btn-sm';
@@ -662,6 +674,55 @@
             loadAdminSettings();
           } catch (err) {
             toast(err.message || '修改失败', true);
+          } finally {
+            save.disabled = false;
+          }
+        });
+
+        box.append(input, save, cancel);
+        li.append(box);
+        input.focus();
+      }
+
+      function openGrantEditor(li, u) {
+        if (li.querySelector('.user-editor')) return;
+        const box = document.createElement('div');
+        box.className = 'user-editor';
+
+        const input = document.createElement('input');
+        input.type = 'password';
+        input.autocomplete = 'off';
+        input.placeholder = '你的二级密码（授予操作需要验证）';
+
+        const save = document.createElement('button');
+        save.type = 'button';
+        save.className = 'btn btn-primary btn-sm';
+        save.textContent = '确认授予';
+
+        const cancel = document.createElement('button');
+        cancel.type = 'button';
+        cancel.className = 'btn btn-ghost btn-sm';
+        cancel.textContent = '取消';
+        cancel.addEventListener('click', () => box.remove());
+
+        save.addEventListener('click', async () => {
+          const adminCode = input.value.trim();
+          if (!adminCode) {
+            toast('请输入你的二级密码', true);
+            return;
+          }
+          save.disabled = true;
+          try {
+            await request('/api/admin/users/grant', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ username: u.username, adminCode }),
+            });
+            box.remove();
+            toast(`${u.username} 已是管理员，让对方登录后在「管理」里设置自己的二级密码`);
+            loadAdminSettings();
+          } catch (err) {
+            toast(err.message || '授予失败', true);
           } finally {
             save.disabled = false;
           }
@@ -772,6 +833,38 @@
     }
   });
 
+  $('#saveSecond').addEventListener('click', async () => {
+    const oldCode = $('#oldSecond').value.trim();
+    const newCode = $('#newSecond').value.trim();
+    const msg = $('#secondMsg');
+    const btn = $('#saveSecond');
+
+    if (newCode.length < 6) {
+      msg.textContent = '二级密码至少 6 位';
+      return;
+    }
+
+    btn.disabled = true;
+    btn.textContent = '保存中…';
+    try {
+      const res = await request('/api/admin/second-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ oldCode, newCode }),
+      });
+      $('#oldSecond').value = '';
+      $('#newSecond').value = '';
+      msg.textContent = res.initial ? '二级密码已设置好' : '二级密码已更新';
+      toast(res.initial ? '二级密码已设置' : '二级密码已更新');
+    } catch (err) {
+      if (err.status === 401) return showLogin('登录已过期，请重新登录');
+      msg.textContent = err.message || '保存失败';
+    } finally {
+      btn.disabled = false;
+      btn.textContent = '保存二级密码';
+    }
+  });
+
   /* ------------------------------------------------------------- 启动 */
 
   (async function boot() {
@@ -780,6 +873,7 @@
       state.maxUploadMb = session.maxUploadMb || state.maxUploadMb;
       state.minPasswordLen = session.minPasswordLen || state.minPasswordLen;
       state.allowRegister = Boolean(session.allowRegister);
+      state.hasSecondPassword = Boolean(session.hasSecondPassword);
       if (session.authenticated) showApp(session.user || '管理员', session.role);
       else showLogin();
     } catch {
