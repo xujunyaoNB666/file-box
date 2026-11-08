@@ -25,6 +25,7 @@
     <div class="topbar-actions" id="topbarActions" hidden>
       <span class="user-chip" id="userChip"></span>
       <button class="btn btn-ghost" id="adminBtn" type="button" hidden>管理</button>
+      <button class="btn btn-ghost" id="pwdBtn" type="button" hidden>改密码</button>
       <button class="btn btn-ghost" id="logoutBtn" type="button">退出</button>
     </div>
   </header>
@@ -43,10 +44,33 @@
       </label>
       <button class="btn btn-primary btn-block" id="loginBtn" type="submit">登录</button>
       <p class="form-msg" id="loginMsg" role="status"></p>
+      <p class="switch-line"><button type="button" class="link" id="toForgot">忘记密码</button></p>
       <p class="switch-line" id="registerEntry" hidden>
         还没有账号？<button type="button" class="link" id="toRegister">注册一个</button>
       </p>
       <p class="switch-line" id="registerClosed" hidden>管理员暂未开放注册</p>
+    </form>
+
+    <form class="card login-card" id="forgotForm" hidden>
+      <h2>找回密码</h2>
+      <p class="hint">向管理员要一个「重置码」，填在这里就能自己设新密码。重置码 30 分钟内有效，用一次就作废。</p>
+      <label class="field">
+        <span>账号</span>
+        <input id="forgotUsername" type="text" autocomplete="username" autocapitalize="off" spellcheck="false" required>
+      </label>
+      <label class="field">
+        <span>重置码</span>
+        <input id="forgotCode" type="text" autocomplete="one-time-code" autocapitalize="characters" spellcheck="false" placeholder="管理员给你的 8 位码" required>
+      </label>
+      <label class="field">
+        <span>新密码</span>
+        <input id="forgotPassword" type="password" autocomplete="new-password" minlength="6" required>
+      </label>
+      <button class="btn btn-primary btn-block" id="forgotBtn" type="submit">重置密码</button>
+      <p class="form-msg" id="forgotMsg" role="status"></p>
+      <p class="switch-line">
+        想起来了？<button type="button" class="link" id="forgotBack">回到登录</button>
+      </p>
     </form>
 
     <form class="card login-card" id="registerForm" hidden>
@@ -148,7 +172,30 @@
 
       <div class="admin-block">
         <h3>已注册账号</h3>
+        <p class="meta">「重置码」给忘记密码的人用：对方在登录页点「忘记密码」填进去就能自己设新密码，30 分钟有效、用一次就作废</p>
         <ul class="user-list" id="userList"></ul>
+      </div>
+    </div>
+
+    <div class="panel admin-panel" id="accountPanel" hidden>
+      <div class="panel-head">
+        <div>
+          <h2>修改密码</h2>
+          <p class="meta">保存后立即生效，其它设备上的登录状态会失效</p>
+        </div>
+        <div class="head-actions">
+          <button class="btn btn-ghost" id="accountClose" type="button">收起</button>
+        </div>
+      </div>
+      <div class="admin-block">
+        <div class="admin-grid">
+          <label class="field">
+            <span>新密码</span>
+            <input id="selfPassword" type="password" autocomplete="new-password" minlength="6">
+          </label>
+          <button class="btn btn-primary" id="saveSelfPassword" type="button">保存新密码</button>
+        </div>
+        <p class="form-msg" id="selfPwdMsg" role="status"></p>
       </div>
     </div>
   </section>
