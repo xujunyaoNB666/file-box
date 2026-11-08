@@ -280,31 +280,20 @@ async function uniqueName(username, name) {
 
 /* ---------------------------------------------------------------- 登录限流 */
 
-const loginAttempts = new Map();
-const RATE_WINDOW_MS = 15 * 60 * 1000;
-const RATE_MAX_FAILS = 5;
+/* 忘记密码用的重置码 */
+const RESET_CODE_TTL = 30 * 60 * 1000;
+const RESET_CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 
-function rateState(ip) {
-  const now = Date.now();
-  const entry = loginAttempts.get(ip);
-  if (!entry || entry.resetAt < now) return { fails: 0, resetAt: now + RATE_WINDOW_MS, blockedUntil: 0 };
-  return entry;
+function makeResetCode() {
+  const bytes = crypto.randomBytes(8);
+  let code = '';
+  for (let i = 0; i < 8; i += 1) code += RESET_CODE_ALPHABET[bytes[i] % RESET_CODE_ALPHABET.length];
+  return code;
 }
 
-function recordFailure(ip) {
-  const state = rateState(ip);
-  state.fails += 1;
-  if (state.fails >= RATE_MAX_FAILS) state.blockedUntil = Date.now() + RATE_WINDOW_MS;
-  loginAttempts.set(ip, state);
-  return state;
+function normalizeCode(raw) {
+  return typeof raw === 'string' ? raw.replace(/[\s-]/g, '').toUpperCase() : '';
 }
-
-setInterval(() => {
-  const now = Date.now();
-  for (const [ip, entry] of loginAttempts) {
-    if (entry.resetAt < now && entry.blockedUntil < now) loginAttempts.delete(ip);
-  }
-}, 5 * 60 * 1000).unref();
 
 /* ---------------------------------------------------------------- 应用初始化 */
 
@@ -385,24 +374,14 @@ app.get('/api/session', (req, res) => {
 });
 
 app.post('/api/login', sameOrigin, (req, res) => {
-  const ip = req.ip || 'unknown';
-  const state = rateState(ip);
-  if (state.blockedUntil > Date.now()) {
-    const seconds = Math.ceil((state.blockedUntil - Date.now()) / 1000);
-    return res.status(429).json({ error: `尝试次数过多，请 ${seconds} 秒后再试` });
-  }
-
   const username = typeof req.body?.username === 'string' ? req.body.username.trim().toLowerCase() : '';
   const password = typeof req.body?.password === 'string' ? req.body.password : '';
   const account = findUser(username);
 
   if (!account || !checkPassword(account, password)) {
-    recordFailure(ip);
-    const left = Math.max(0, RATE_MAX_FAILS - rateState(ip).fails);
-    return res.status(401).json({ error: '用户名或密码错误', remaining: left });
+    return res.status(401).json({ error: '用户名或密码错误' });
   }
 
-  loginAttempts.delete(ip);
   issueSession(res, account);
   return res.json({ ok: true, user: account.username, role: account.role });
 });
@@ -444,6 +423,80 @@ app.post('/api/logout', sameOrigin, (req, res) => {
   res.json({ ok: true });
 });
 
+/* ------------------------------------------------------- 账号自助（改密码） */
+
+/** 任意已登录账号自己改密码：立即生效，旧会话全部失效，当前这次重新签发 */
+app.post('/api/password', requireAuth, sameOrigin, async (req, res, next) => {
+  try {
+    const password = typeof req.body?.password === 'string' ? req.body.password : '';
+    if (password.length < MIN_PASSWORD_LEN) {
+      return res.status(400).json({ error: `密码至少 ${MIN_PASSWORD_LEN} 位` });
+    }
+
+    const account = req.account;
+    const fresh = hashPassword(password);
+    account.salt = fresh.salt;
+    account.hash = fresh.hash;
+    account.pv = Number(account.pv || 0) + 1;
+    account.resetCode = null;
+    account.resetExpires = 0;
+    await saveStore();
+
+    issueSession(res, account);
+    return res.json({ ok: true, user: account.username });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * 忘记密码：管理员在后台为某个普通账号生成一次性重置码，
+ * 用户在登录页输入「账号 + 重置码 + 新密码」自助重置。
+ * 管理员账号不支持这条路径（它自己登录后在后台改即可）。
+ */
+app.post('/api/forgot/reset', sameOrigin, async (req, res, next) => {
+  try {
+    const username = typeof req.body?.username === 'string' ? req.body.username.trim().toLowerCase() : '';
+    const code = normalizeCode(req.body?.code);
+    const password = typeof req.body?.password === 'string' ? req.body.password : '';
+
+    if (password.length < MIN_PASSWORD_LEN) {
+      return res.status(400).json({ error: `新密码至少 ${MIN_PASSWORD_LEN} 位` });
+    }
+    if (!USERNAME_RE.test(username) || !code) {
+      return res.status(400).json({ error: '重置码无效或已过期，请找管理员重新生成' });
+    }
+
+    const account = findUser(username);
+    if (!account) {
+      return res.status(400).json({ error: '重置码无效或已过期，请找管理员重新生成' });
+    }
+    if (account.role === 'admin') {
+      return res.status(403).json({ error: '管理员账号不支持自助重置，请登录后在「管理」里改密码' });
+    }
+    if (
+      !account.resetCode ||
+      !account.resetExpires ||
+      Number(account.resetExpires) < Date.now() ||
+      normalizeCode(account.resetCode) !== code
+    ) {
+      return res.status(400).json({ error: '重置码无效或已过期，请找管理员重新生成' });
+    }
+
+    const fresh = hashPassword(password);
+    account.salt = fresh.salt;
+    account.hash = fresh.hash;
+    account.pv = Number(account.pv || 0) + 1;
+    account.resetCode = null;
+    account.resetExpires = 0;
+    await saveStore();
+
+    return res.json({ ok: true, user: account.username });
+  } catch (err) {
+    next(err);
+  }
+});
+
 /* ------------------------------------------------------- 管理员（后台开关） */
 
 app.get('/api/admin/settings', requireAuth, requireAdmin, async (req, res, next) => {
@@ -457,6 +510,8 @@ app.get('/api/admin/settings', requireAuth, requireAdmin, async (req, res, next)
         role: u.role,
         createdAt: u.createdAt || 0,
         files,
+        resetCode: u.resetCode && Number(u.resetExpires) > Date.now() ? u.resetCode : null,
+        resetExpires: u.resetCode && Number(u.resetExpires) > Date.now() ? Number(u.resetExpires) : 0,
       });
     }
     res.setHeader('Cache-Control', 'no-store');
@@ -530,6 +585,39 @@ app.post('/api/admin/users/password', requireAuth, requireAdmin, sameOrigin, asy
     const self = target.username === req.account.username;
     if (self) issueSession(res, target);
     return res.json({ ok: true, username: target.username, self });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/** 给某个普通账号发一次性重置码（管理员账号不支持） */
+app.post('/api/admin/users/reset-code', requireAuth, requireAdmin, sameOrigin, async (req, res, next) => {
+  try {
+    const username = typeof req.body?.username === 'string' ? req.body.username.trim().toLowerCase() : '';
+    if (!USERNAME_RE.test(username)) {
+      return res.status(400).json({ error: '账号不存在' });
+    }
+
+    const target = findUser(username);
+    if (!target) {
+      return res.status(404).json({ error: '账号不存在' });
+    }
+    if (target.role === 'admin') {
+      return res.status(403).json({ error: '管理员账号不支持重置码，请直接改密码' });
+    }
+
+    const code = makeResetCode();
+    target.resetCode = code;
+    target.resetExpires = Date.now() + RESET_CODE_TTL;
+    await saveStore();
+
+    return res.json({
+      ok: true,
+      username: target.username,
+      code,
+      expiresAt: target.resetExpires,
+      ttlMinutes: Math.round(RESET_CODE_TTL / 60000),
+    });
   } catch (err) {
     next(err);
   }
