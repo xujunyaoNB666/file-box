@@ -69,15 +69,26 @@
     $('#appView').hidden = true;
     $('#topbarActions').hidden = true;
     $('#adminPanel').hidden = true;
+    $('#accountPanel').hidden = true;
     $('#loginForm').hidden = false;
     $('#registerForm').hidden = true;
+    $('#forgotForm').hidden = true;
     $('#loginMsg').textContent = message || '';
     syncRegisterEntry();
     setTimeout(() => $('#username').focus(), 60);
   }
 
+  function showForgot(message) {
+    $('#loginForm').hidden = true;
+    $('#registerForm').hidden = true;
+    $('#forgotForm').hidden = false;
+    $('#forgotMsg').textContent = message || '';
+    setTimeout(() => $('#forgotUsername').focus(), 60);
+  }
+
   function showRegister() {
     $('#loginForm').hidden = true;
+    $('#forgotForm').hidden = true;
     $('#registerForm').hidden = false;
     $('#registerMsg').textContent = '';
     setTimeout(() => $('#regUsername').focus(), 60);
@@ -91,7 +102,9 @@
     $('#topbarActions').hidden = false;
     $('#userChip').textContent = state.role === 'admin' ? `${user}（管理员）` : user;
     $('#adminBtn').hidden = state.role !== 'admin';
+    $('#pwdBtn').hidden = state.role === 'admin';
     $('#adminPanel').hidden = true;
+    $('#accountPanel').hidden = true;
     $('#listTitle').textContent = state.role === 'admin' ? '全部文件' : '我的文件';
     $('#dzHint').textContent = `单个文件不超过 ${state.maxUploadMb} MB，支持一次选择多个文件`;
     loadFiles();
@@ -132,6 +145,48 @@
 
   $('#toRegister').addEventListener('click', showRegister);
   $('#toLogin').addEventListener('click', () => showLogin());
+  $('#toForgot').addEventListener('click', () => showForgot());
+  $('#forgotBack').addEventListener('click', () => {
+    $('#forgotForm').reset();
+    showLogin('');
+  });
+
+  $('#forgotForm').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const username = $('#forgotUsername').value.trim();
+    const code = $('#forgotCode').value.trim();
+    const password = $('#forgotPassword').value;
+    const btn = $('#forgotBtn');
+    const msg = $('#forgotMsg');
+
+    if (!username || !code) {
+      msg.textContent = '请填写账号和重置码';
+      return;
+    }
+    if (password.length < state.minPasswordLen) {
+      msg.textContent = `新密码至少 ${state.minPasswordLen} 位`;
+      return;
+    }
+
+    btn.disabled = true;
+    btn.textContent = '重置中…';
+    msg.textContent = '';
+    try {
+      const data = await request('/api/forgot/reset', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, code, password }),
+      });
+      $('#forgotForm').reset();
+      showLogin(`账号 ${data.user} 的密码已重置，用新密码登录即可`);
+      toast('密码已重置');
+    } catch (err) {
+      msg.textContent = err.message || '重置失败';
+    } finally {
+      btn.disabled = false;
+      btn.textContent = '重置密码';
+    }
+  });
 
   $('#registerForm').addEventListener('submit', async (event) => {
     event.preventDefault();
@@ -456,6 +511,52 @@
     $('#adminPanel').hidden = true;
   });
 
+  $('#pwdBtn').addEventListener('click', () => {
+    const panel = $('#accountPanel');
+    const opening = panel.hidden;
+    panel.hidden = !opening;
+    if (opening) {
+      $('#selfPwdMsg').textContent = '';
+      panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      setTimeout(() => $('#selfPassword').focus(), 200);
+    }
+  });
+
+  $('#accountClose').addEventListener('click', () => {
+    $('#accountPanel').hidden = true;
+  });
+
+  $('#saveSelfPassword').addEventListener('click', async () => {
+    const input = $('#selfPassword');
+    const msg = $('#selfPwdMsg');
+    const password = input.value;
+
+    if (password.length < state.minPasswordLen) {
+      msg.textContent = `密码至少 ${state.minPasswordLen} 位`;
+      return;
+    }
+
+    const btn = $('#saveSelfPassword');
+    btn.disabled = true;
+    btn.textContent = '保存中…';
+    try {
+      await request('/api/password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password }),
+      });
+      input.value = '';
+      msg.textContent = '密码已更新，立即生效（其它设备需重新登录）';
+      toast('密码已更新');
+    } catch (err) {
+      if (err.status === 401) return showLogin('登录已过期，请重新登录');
+      msg.textContent = err.message || '修改失败';
+    } finally {
+      btn.disabled = false;
+      btn.textContent = '保存新密码';
+    }
+  });
+
   async function loadAdminSettings() {
     try {
       const data = await request('/api/admin/settings');
@@ -479,6 +580,14 @@
         role.textContent = (isAdmin ? '管理员' : '普通账号') + (u.files ? ` · ${u.files} 个文件` : '');
         main.append(name, role);
 
+        if (!isAdmin && u.resetCode) {
+          const chip = document.createElement('span');
+          chip.className = 'user-code';
+          chip.dataset.role = 'reset-code';
+          chip.textContent = `重置码 ${u.resetCode} · 有效至 ${formatDate(u.resetExpires)}`;
+          main.append(chip);
+        }
+
         const acts = document.createElement('div');
         acts.className = 'user-acts';
 
@@ -490,6 +599,13 @@
         acts.append(pwBtn);
 
         if (!isAdmin) {
+          const codeBtn = document.createElement('button');
+          codeBtn.type = 'button';
+          codeBtn.className = 'btn btn-ghost btn-sm';
+          codeBtn.textContent = u.resetCode ? '换重置码' : '发重置码';
+          codeBtn.addEventListener('click', () => issueResetCode(u, main, codeBtn));
+          acts.append(codeBtn);
+
           const delBtn = document.createElement('button');
           delBtn.type = 'button';
           delBtn.className = 'btn btn-danger btn-sm';
@@ -554,6 +670,33 @@
         box.append(input, save, cancel);
         li.append(box);
         input.focus();
+      }
+
+      async function issueResetCode(u, main, btn) {
+        btn.disabled = true;
+        try {
+          const res = await request('/api/admin/users/reset-code', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username: u.username }),
+          });
+          let chip = main.querySelector('[data-role="reset-code"]');
+          if (!chip) {
+            chip = document.createElement('span');
+            chip.className = 'user-code';
+            chip.dataset.role = 'reset-code';
+            main.append(chip);
+          }
+          chip.textContent = `重置码 ${res.code} · 有效至 ${formatDate(res.expiresAt)}`;
+          u.resetCode = res.code;
+          u.resetExpires = res.expiresAt;
+          btn.textContent = '换重置码';
+          toast(`${u.username} 的重置码：${res.code}（${res.ttlMinutes} 分钟内有效）`);
+        } catch (err) {
+          toast(err.message || '生成重置码失败', true);
+        } finally {
+          btn.disabled = false;
+        }
       }
 
       async function deleteUser(u, li) {
