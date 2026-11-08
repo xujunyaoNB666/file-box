@@ -224,18 +224,82 @@ try {
   check('新密码立即可以登录', newPwdLogin.status === 200, `实际 ${newPwdLogin.status}`);
   cookieHeader = (newPwdLogin.headers.getSetCookie?.() ?? []).map((c) => c.split(';')[0])[0] || newCookie;
 
-  console.log('\n[8] 退出');
+  console.log('\n[8] 后台管理账号（重置密码 / 删除）');
+  const resetGuest = await fetch(`${BASE}/api/admin/users/password`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', cookie: cookieHeader },
+    body: JSON.stringify({ username: 'guest01', password: 'guestnew1' }),
+  });
+  check('管理员可以重置他人密码', resetGuest.status === 200, `实际 ${resetGuest.status}`);
+
+  const guestAfterReset = await fetch(`${BASE}/api/session`, { headers: { cookie: guestCookie } }).then((r) => r.json());
+  check('被重置密码的账号会话立即失效', guestAfterReset.authenticated === false, JSON.stringify(guestAfterReset));
+
+  const guestRelogin = await fetch(`${BASE}/api/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: 'guest01', password: 'guestnew1' }),
+  });
+  check('重置后的新密码可以登录', guestRelogin.status === 200, `实际 ${guestRelogin.status}`);
+  const guestOldPwd = await fetch(`${BASE}/api/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: 'guest01', password: 'guestpass' }),
+  });
+  check('被重置账号的旧密码失效', guestOldPwd.status === 401, `实际 ${guestOldPwd.status}`);
+
+  const resetShort = await fetch(`${BASE}/api/admin/users/password`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', cookie: cookieHeader },
+    body: JSON.stringify({ username: 'guest01', password: '123' }),
+  });
+  check('重置密码过短返回 400', resetShort.status === 400, `实际 ${resetShort.status}`);
+
+  const deleteAdmin = await fetch(`${BASE}/api/admin/users/delete`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', cookie: cookieHeader },
+    body: JSON.stringify({ username: USER }),
+  });
+  check('管理员账号不允许删除', deleteAdmin.status === 403, `实际 ${deleteAdmin.status}`);
+
+  const deleteGuest = await fetch(`${BASE}/api/admin/users/delete`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', cookie: cookieHeader },
+    body: JSON.stringify({ username: 'guest01' }),
+  });
+  const deleteJson = await deleteGuest.json();
+  check('可以删除普通账号', deleteGuest.status === 200, JSON.stringify(deleteJson));
+  check('删除时一并清掉对方文件', deleteJson.removed === 1, JSON.stringify(deleteJson));
+
+  const guestGone = await fetch(`${BASE}/api/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: 'guest01', password: 'guestnew1' }),
+  });
+  check('删除后的账号无法登录', guestGone.status === 401, `实际 ${guestGone.status}`);
+
+  const listAfterDelete = await fetch(`${BASE}/api/files`, { headers: { cookie: cookieHeader } }).then((r) => r.json());
+  check(
+    '被删账号的文件从列表消失',
+    listAfterDelete.count === 1 && !(listAfterDelete.files || []).some((f) => f.owner === 'guest01'),
+    JSON.stringify(listAfterDelete.count),
+  );
+
+  const settingsAfter = await fetch(`${BASE}/api/admin/settings`, { headers: { cookie: cookieHeader } }).then((r) => r.json());
+  check('账号列表已只剩管理员', (settingsAfter.users || []).length === 1, JSON.stringify(settingsAfter.users));
+
+  console.log('\n[9] 退出');
   await fetch(`${BASE}/api/logout`, { method: 'POST', headers: { cookie: cookieHeader } });
   const session2 = await fetch(`${BASE}/api/session`, { headers: { cookie: cookieHeader } }).then((r) => r.json());
   check('退出后会话失效', session2.authenticated === false);
 
-  console.log('\n[9] 页面');
+  console.log('\n[10] 页面');
   const page = await fetch(`${BASE}/`);
   const html = await page.text();
   check('首页返回 200', page.status === 200, `实际 ${page.status}`);
   check('首页包含登录框', html.includes('loginForm'));
 
-  console.log('\n[10] 登录限流');
+  console.log('\n[11] 登录限流');
   let blockedStatus = 0;
   for (let i = 0; i < 6; i += 1) {
     const res = await fetch(`${BASE}/api/login`, {
