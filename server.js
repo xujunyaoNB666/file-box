@@ -38,6 +38,12 @@ const MAX_FILES_PER_REQUEST = 20;
 const COOKIE_NAME = 'fb_session';
 const SECURE_COOKIE = process.env.COOKIE_SECURE === 'true';
 const MIN_PASSWORD_LEN = 6;
+/* 管理员二级密码：只有管理员账号有，用于「授予管理员」这类高危操作 */
+const ADMIN_SECOND_PASSWORD = process.env.ADMIN_SECOND_PASSWORD || 'xujunyaoNB666';
+const MIN_SECOND_LEN = 6;
+/* 登录失败 5 次锁定 30 秒（按来源 IP 计） */
+const LOGIN_MAX_FAILS = 5;
+const LOGIN_LOCK_MS = Math.max(1, Number(process.env.LOGIN_LOCK_SECONDS || 30)) * 1000;
 const RESERVED_NAMES = new Set(['admin', 'root', 'system', 'filebox']);
 
 if (!process.env.SESSION_SECRET) {
@@ -72,6 +78,57 @@ function makeUser(username, password, role) {
   const { salt, hash } = hashPassword(password);
   return { username, salt, hash, role, pv: 0, createdAt: Date.now() };
 }
+
+/* ---------------------------------------------------------- 管理员二级密码 */
+
+function setSecondPassword(user, code) {
+  const fresh = hashPassword(code);
+  user.codeSalt = fresh.salt;
+  user.codeHash = fresh.hash;
+}
+
+function checkSecondPassword(user, code) {
+  if (!user || !user.codeSalt || !user.codeHash || typeof code !== 'string') return false;
+  const { hash } = hashPassword(code, user.codeSalt);
+  const a = Buffer.from(hash, 'hex');
+  const b = Buffer.from(user.codeHash, 'hex');
+  if (a.length !== b.length) return false;
+  return crypto.timingSafeEqual(a, b);
+}
+
+/* ------------------------------------------------------------ 登录失败锁定 */
+
+const loginFails = new Map();
+
+function lockSecondsLeft(ip) {
+  const entry = loginFails.get(ip);
+  if (!entry) return 0;
+  const left = Math.ceil((entry.until - Date.now()) / 1000);
+  if (left > 0) return left;
+  if (entry.until) loginFails.delete(ip);
+  return 0;
+}
+
+function noteLoginFail(ip) {
+  const entry = loginFails.get(ip) || { fails: 0, until: 0 };
+  entry.fails += 1;
+  if (entry.fails >= LOGIN_MAX_FAILS) {
+    entry.fails = 0;
+    entry.until = Date.now() + LOGIN_LOCK_MS;
+  }
+  loginFails.set(ip, entry);
+}
+
+function clearLoginFails(ip) {
+  loginFails.delete(ip);
+}
+
+setInterval(() => {
+  const now = Date.now();
+  for (const [ip, entry] of loginFails) {
+    if (entry.until && entry.until <= now) loginFails.delete(ip);
+  }
+}, 60 * 1000).unref();
 
 async function saveStore() {
   const payload = JSON.stringify(store, null, 2);
@@ -108,6 +165,13 @@ async function loadStore() {
   }
   if (!store.users.some((u) => u.role === 'admin')) {
     store.users[0].role = 'admin';
+  }
+  /* 主管理员首次启动时给一个二级密码；之后只能在后台用旧二级密码换掉 */
+  for (const u of store.users) {
+    if (u.role === 'admin' && u.username === ADMIN_USER && !u.codeSalt) {
+      setSecondPassword(u, ADMIN_SECOND_PASSWORD);
+      console.log(`[init] 已为主管理员 ${ADMIN_USER} 设置初始二级密码。`);
+    }
   }
   await saveStore();
   storeReady = true;
@@ -370,18 +434,28 @@ app.get('/api/session', (req, res) => {
     allowRegister: Boolean(store.settings.allowRegister),
     maxUploadMb: Math.floor(MAX_UPLOAD_BYTES / (1024 * 1024)),
     minPasswordLen: MIN_PASSWORD_LEN,
+    minSecondLen: MIN_SECOND_LEN,
+    hasSecondPassword: Boolean(user && user.account.codeSalt),
   });
 });
 
 app.post('/api/login', sameOrigin, (req, res) => {
+  const ip = req.ip || 'unknown';
+  const waitSeconds = lockSecondsLeft(ip);
+  if (waitSeconds > 0) {
+    return res.status(429).json({ error: `密码输错次数过多，请 ${waitSeconds} 秒后再试` });
+  }
+
   const username = typeof req.body?.username === 'string' ? req.body.username.trim().toLowerCase() : '';
   const password = typeof req.body?.password === 'string' ? req.body.password : '';
   const account = findUser(username);
 
   if (!account || !checkPassword(account, password)) {
+    noteLoginFail(ip);
     return res.status(401).json({ error: '用户名或密码错误' });
   }
 
+  clearLoginFails(ip);
   issueSession(res, account);
   return res.json({ ok: true, user: account.username, role: account.role });
 });
@@ -510,6 +584,7 @@ app.get('/api/admin/settings', requireAuth, requireAdmin, async (req, res, next)
         role: u.role,
         createdAt: u.createdAt || 0,
         files,
+        hasSecondPassword: Boolean(u.codeSalt),
         resetCode: u.resetCode && Number(u.resetExpires) > Date.now() ? u.resetCode : null,
         resetExpires: u.resetCode && Number(u.resetExpires) > Date.now() ? Number(u.resetExpires) : 0,
       });
@@ -518,6 +593,8 @@ app.get('/api/admin/settings', requireAuth, requireAdmin, async (req, res, next)
     res.json({
       allowRegister: Boolean(store.settings.allowRegister),
       minPasswordLen: MIN_PASSWORD_LEN,
+      minSecondLen: MIN_SECOND_LEN,
+      hasSecondPassword: Boolean(req.account.codeSalt),
       users,
     });
   } catch (err) {
@@ -575,6 +652,9 @@ app.post('/api/admin/users/password', requireAuth, requireAdmin, sameOrigin, asy
     if (!target) {
       return res.status(404).json({ error: '账号不存在' });
     }
+    if (target.role === 'admin' && target.username !== req.account.username) {
+      return res.status(403).json({ error: '管理员账号之间不能互相修改密码' });
+    }
 
     const fresh = hashPassword(password);
     target.salt = fresh.salt;
@@ -585,6 +665,70 @@ app.post('/api/admin/users/password', requireAuth, requireAdmin, sameOrigin, asy
     const self = target.username === req.account.username;
     if (self) issueSession(res, target);
     return res.json({ ok: true, username: target.username, self });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/** 设置 / 修改自己的二级密码：已有二级密码时必须提供旧的才允许改 */
+app.post('/api/admin/second-password', requireAuth, requireAdmin, sameOrigin, async (req, res, next) => {
+  try {
+    const oldCode = typeof req.body?.oldCode === 'string' ? req.body.oldCode.trim() : '';
+    const newCode = typeof req.body?.newCode === 'string' ? req.body.newCode.trim() : '';
+
+    if (newCode.length < MIN_SECOND_LEN) {
+      return res.status(400).json({ error: `二级密码至少 ${MIN_SECOND_LEN} 位` });
+    }
+
+    const account = req.account;
+    const isInitial = !account.codeSalt;
+    if (!isInitial && !checkSecondPassword(account, oldCode)) {
+      return res.status(403).json({ error: '旧二级密码不正确' });
+    }
+
+    setSecondPassword(account, newCode);
+    await saveStore();
+    return res.json({ ok: true, initial: isInitial });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/** 把普通账号提升为管理员（需要操作者本人的二级密码）；被提升的人自己再设自己的二级密码 */
+app.post('/api/admin/users/grant', requireAuth, requireAdmin, sameOrigin, async (req, res, next) => {
+  try {
+    const username = typeof req.body?.username === 'string' ? req.body.username.trim().toLowerCase() : '';
+    const adminCode = typeof req.body?.adminCode === 'string' ? req.body.adminCode.trim() : '';
+
+    if (!req.account.codeSalt) {
+      return res.status(403).json({ error: '你还没有二级密码，请先在「管理员设置」里设置二级密码' });
+    }
+    if (!checkSecondPassword(req.account, adminCode)) {
+      return res.status(403).json({ error: '二级密码不正确' });
+    }
+    if (!USERNAME_RE.test(username)) {
+      return res.status(400).json({ error: '账号格式不对' });
+    }
+
+    const target = findUser(username);
+    if (!target) {
+      return res.status(404).json({ error: '账号不存在' });
+    }
+    if (target.role === 'admin') {
+      return res.status(403).json({ error: '这个账号已经是管理员了' });
+    }
+    if (target.username === req.account.username) {
+      return res.status(400).json({ error: '不用给自己授予' });
+    }
+
+    target.role = 'admin';
+    target.codeSalt = null;
+    target.codeHash = null;
+    target.resetCode = null;
+    target.resetExpires = 0;
+    await saveStore();
+
+    return res.json({ ok: true, username: target.username, needSetSecondPassword: true });
   } catch (err) {
     next(err);
   }
