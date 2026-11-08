@@ -55,6 +55,7 @@ const child = spawn(process.execPath, [path.join(root, 'server.js')], {
     ADMIN_PASSWORD: PASSWORD,
     SESSION_SECRET: 'test-secret-for-smoke-test',
     MAX_UPLOAD_MB: '10',
+    LOGIN_LOCK_SECONDS: '2',
   },
   stdio: ['ignore', 'pipe', 'pipe'],
 });
@@ -382,38 +383,177 @@ try {
   const settingsAfter = await fetch(`${BASE}/api/admin/settings`, { headers: { cookie: cookieHeader } }).then((r) => r.json());
   check('账号列表已只剩管理员', (settingsAfter.users || []).length === 1, JSON.stringify(settingsAfter.users));
 
-  console.log('\n[11] 退出');
+  console.log('\n[11] 管理员二级密码与授予管理员');
+  const regMgr = await fetch(`${BASE}/api/register`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: 'mgr01', password: 'mgr01pass' }),
+  });
+  check('准备测试账号 mgr01', regMgr.status === 200, `实际 ${regMgr.status}`);
+
+  const badGrant = await fetch(`${BASE}/api/admin/users/grant`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', cookie: cookieHeader },
+    body: JSON.stringify({ username: 'mgr01', adminCode: 'wrong-code' }),
+  });
+  check('二级密码错误时无法授予管理员', badGrant.status === 403, `实际 ${badGrant.status}`);
+
+  const grantOk = await fetch(`${BASE}/api/admin/users/grant`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', cookie: cookieHeader },
+    body: JSON.stringify({ username: 'mgr01', adminCode: 'xujunyaoNB666' }),
+  });
+  check('二级密码正确时可以授予管理员', grantOk.status === 200, `实际 ${grantOk.status}`);
+
+  const mgrLogin = await fetch(`${BASE}/api/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: 'mgr01', password: 'mgr01pass' }),
+  });
+  const mgrLoginJson = await mgrLogin.json();
+  check('被授予的账号立即是管理员', mgrLoginJson.role === 'admin', JSON.stringify(mgrLoginJson));
+  const mgrCookie = (mgrLogin.headers.getSetCookie?.() ?? []).map((c) => c.split(';')[0])[0] || '';
+
+  const mgrSettings = await fetch(`${BASE}/api/admin/settings`, { headers: { cookie: mgrCookie } });
+  check('新管理员能打开后台', mgrSettings.status === 200, `实际 ${mgrSettings.status}`);
+
+  await fetch(`${BASE}/api/register`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: 'mgr02', password: 'mgr02pass' }),
+  });
+
+  const mgrNoCode = await fetch(`${BASE}/api/admin/users/grant`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', cookie: mgrCookie },
+    body: JSON.stringify({ username: 'mgr02', adminCode: 'whatever' }),
+  });
+  const mgrNoCodeJson = await mgrNoCode.json();
+  check('新管理员还没设二级密码时不能授予', mgrNoCode.status === 403, `实际 ${mgrNoCode.status}`);
+  check('提示让对方先设置二级密码', String(mgrNoCodeJson.error || '').includes('二级密码'), JSON.stringify(mgrNoCodeJson));
+
+  const setOwn = await fetch(`${BASE}/api/admin/second-password`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', cookie: mgrCookie },
+    body: JSON.stringify({ oldCode: '', newCode: 'mgrsecond1' }),
+  });
+  const setOwnJson = await setOwn.json();
+  check('新管理员可以首次设置自己的二级密码', setOwn.status === 200 && setOwnJson.initial === true, JSON.stringify(setOwnJson));
+
+  const mgrGrantOk = await fetch(`${BASE}/api/admin/users/grant`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', cookie: mgrCookie },
+    body: JSON.stringify({ username: 'mgr02', adminCode: 'mgrsecond1' }),
+  });
+  check('新管理员设好二级密码后可以授予他人', mgrGrantOk.status === 200, `实际 ${mgrGrantOk.status}`);
+
+  const otherPw = await fetch(`${BASE}/api/admin/users/password`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', cookie: cookieHeader },
+    body: JSON.stringify({ username: 'mgr01', password: 'hacked1' }),
+  });
+  check('不能修改另一个管理员的密码', otherPw.status === 403, `实际 ${otherPw.status}`);
+
+  const otherReset = await fetch(`${BASE}/api/admin/users/reset-code`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', cookie: cookieHeader },
+    body: JSON.stringify({ username: 'mgr01' }),
+  });
+  check('不能给管理员发重置码', otherReset.status === 403, `实际 ${otherReset.status}`);
+
+  const otherDelete = await fetch(`${BASE}/api/admin/users/delete`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', cookie: cookieHeader },
+    body: JSON.stringify({ username: 'mgr01' }),
+  });
+  check('不能删除管理员', otherDelete.status === 403, `实际 ${otherDelete.status}`);
+
+  const wrongOld = await fetch(`${BASE}/api/admin/second-password`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', cookie: cookieHeader },
+    body: JSON.stringify({ oldCode: 'not-my-code', newCode: 'xujunyaoNB6661' }),
+  });
+  check('改二级密码必须提供正确的旧二级密码', wrongOld.status === 403, `实际 ${wrongOld.status}`);
+
+  const changeOk = await fetch(`${BASE}/api/admin/second-password`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', cookie: cookieHeader },
+    body: JSON.stringify({ oldCode: 'xujunyaoNB666', newCode: 'xujunyaoNB6669' }),
+  });
+  check('旧二级密码正确时可以更换二级密码', changeOk.status === 200, `实际 ${changeOk.status}`);
+
+  const reuseOld = await fetch(`${BASE}/api/admin/second-password`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', cookie: cookieHeader },
+    body: JSON.stringify({ oldCode: 'xujunyaoNB666', newCode: 'another123' }),
+  });
+  check('旧二级密码换掉之后立即失效', reuseOld.status === 403, `实际 ${reuseOld.status}`);
+
+  await fetch(`${BASE}/api/register`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: 'mgr03', password: 'mgr03pass' }),
+  });
+  const grantWithNew = await fetch(`${BASE}/api/admin/users/grant`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', cookie: cookieHeader },
+    body: JSON.stringify({ username: 'mgr03', adminCode: 'xujunyaoNB6669' }),
+  });
+  check('用新的二级密码可以继续授予管理员', grantWithNew.status === 200, `实际 ${grantWithNew.status}`);
+
+  console.log('\n[12] 退出');
   await fetch(`${BASE}/api/logout`, { method: 'POST', headers: { cookie: cookieHeader } });
   const session2 = await fetch(`${BASE}/api/session`, { headers: { cookie: cookieHeader } }).then((r) => r.json());
   check('退出后会话失效', session2.authenticated === false);
 
-  console.log('\n[12] 页面');
+  console.log('\n[13] 页面');
   const page = await fetch(`${BASE}/`);
   const html = await page.text();
   check('首页返回 200', page.status === 200, `实际 ${page.status}`);
   check('首页包含登录框', html.includes('loginForm'));
 
-  console.log('\n[13] 连续输错密码不再锁定');
-  let blockedStatus = 0;
-  let sawLockMessage = false;
-  for (let i = 0; i < 6; i += 1) {
-    const res = await fetch(`${BASE}/api/login`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username: USER, password: `wrong-${i}` }),
-    });
-    blockedStatus = res.status;
-    const bodyText = await res.text();
-    if (bodyText.includes('尝试次数过多')) sawLockMessage = true;
-  }
-  check('连输 6 次仍然是 401，不出现 429', blockedStatus === 401, `实际 ${blockedStatus}`);
-  check('不再返回「尝试次数过多」提示', sawLockMessage === false, `仍出现提示`);
-  const afterFailLogin = await fetch(`${BASE}/api/login`, {
+  console.log('\n[14] 登录失败 5 次锁定（测试里配成 2 秒）');
+  const clearFails = await fetch(`${BASE}/api/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ username: USER, password: 'newpass123' }),
   });
-  check('输错多次后正确密码照样能登录', afterFailLogin.status === 200, `实际 ${afterFailLogin.status}`);
+  check('先成功登录一次，清空失败计数', clearFails.status === 200, `实际 ${clearFails.status}`);
+
+  const firstFive = [];
+  for (let i = 0; i < 5; i += 1) {
+    const r = await fetch(`${BASE}/api/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: USER, password: `wrong-${i}` }),
+    });
+    firstFive.push(r.status);
+  }
+  check('前 5 次输错返回 401', firstFive.every((s) => s === 401), JSON.stringify(firstFive));
+
+  const sixth = await fetch(`${BASE}/api/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: USER, password: 'wrong-6' }),
+  });
+  const sixthBody = await sixth.text();
+  check('第 6 次被锁定返回 429', sixth.status === 429, `实际 ${sixth.status}`);
+  check('锁定提示里带剩余秒数', sixthBody.includes('秒后再试'), sixthBody);
+
+  const duringLock = await fetch(`${BASE}/api/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: USER, password: 'newpass123' }),
+  });
+  check('锁定期间正确密码也进不去', duringLock.status === 429, `实际 ${duringLock.status}`);
+
+  await new Promise((r) => setTimeout(r, 2400));
+  const afterLock = await fetch(`${BASE}/api/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: USER, password: 'newpass123' }),
+  });
+  check('锁定到期后正确密码可以登录', afterLock.status === 200, `实际 ${afterLock.status}`);
 
   exitCode = failed === 0 ? 0 : 1;
 } catch (err) {
