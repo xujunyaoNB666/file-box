@@ -1,17 +1,20 @@
 'use strict';
 
 /**
- * FileBox - 单用户/单管理员的私有文件下载站
+ * FileBox - 多账号私有文件站（管理员 + 注册用户，各自独立空间）
  *
  * 环境变量:
  *   PORT              监听端口，默认 3000
- *   DATA_DIR          文件存储目录，默认 ./storage
- *   ADMIN_USER        登录用户名（默认 xujunyao）
- *   ADMIN_PASSWORD    登录密码（默认 shenye128，务必用环境变量覆盖）
+ *   HOST              监听地址，默认 0.0.0.0
+ *   DATA_DIR          文件存储根目录，默认 ./storage（每个账号一个子目录）
+ *   USERS_FILE        账号与设置存储文件，默认 DATA_DIR/.users.json
+ *   ADMIN_USER        初始管理员用户名（仅首次启动创建时使用）
+ *   ADMIN_PASSWORD    初始管理员密码（仅首次启动创建时使用）
  *   SESSION_SECRET    会话签名密钥（不设置则每次启动随机生成，重启后需重新登录）
  *   SESSION_TTL_HOURS 会话有效期小时数，默认 12
  *   MAX_UPLOAD_MB     单文件上限 MB，默认 512
  *   COOKIE_SECURE     true 时给 Cookie 加 Secure（https 部署建议开启）
+ *   DATA_DIR 说明：账号数据以明文文件名存放在 DATA_DIR/<用户名>/ 下
  */
 
 const express = require('express');
@@ -25,7 +28,8 @@ const PORT = Number(process.env.PORT || 3000);
 const HOST = process.env.HOST || '0.0.0.0';
 const DATA_DIR = path.resolve(process.env.DATA_DIR || path.join(__dirname, 'storage'));
 const TMP_DIR = path.join(DATA_DIR, '.tmp');
-const ADMIN_USER = process.env.ADMIN_USER || 'xujunyao';
+const USERS_FILE = process.env.USERS_FILE || path.join(DATA_DIR, '.users.json');
+const ADMIN_USER = (process.env.ADMIN_USER || 'xujunyao').toLowerCase();
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'shenye128';
 const SESSION_SECRET = process.env.SESSION_SECRET || crypto.randomBytes(32).toString('hex');
 const SESSION_TTL = Math.max(1, Number(process.env.SESSION_TTL_HOURS || 12)) * 3600 * 1000;
@@ -33,6 +37,8 @@ const MAX_UPLOAD_BYTES = Math.max(1, Number(process.env.MAX_UPLOAD_MB || 512)) *
 const MAX_FILES_PER_REQUEST = 20;
 const COOKIE_NAME = 'fb_session';
 const SECURE_COOKIE = process.env.COOKIE_SECURE === 'true';
+const MIN_PASSWORD_LEN = 6;
+const RESERVED_NAMES = new Set(['admin', 'root', 'system', 'filebox']);
 
 if (!process.env.SESSION_SECRET) {
   console.warn('[warn] 未设置 SESSION_SECRET，已使用随机密钥，重启后所有会话失效。');
@@ -41,13 +47,79 @@ if (!process.env.ADMIN_PASSWORD) {
   console.warn('[warn] 正在使用内置默认密码，请通过 ADMIN_PASSWORD 环境变量覆盖。');
 }
 
-/* ---------------------------------------------------------------- 工具函数 */
+/* ---------------------------------------------------------------- 账号存储 */
 
-function safeEqual(a, b) {
-  const ha = crypto.createHash('sha256').update(String(a)).digest();
-  const hb = crypto.createHash('sha256').update(String(b)).digest();
-  return crypto.timingSafeEqual(ha, hb);
+const USERNAME_RE = /^[a-z0-9][a-z0-9_-]{1,23}$/;
+
+let store = { settings: { allowRegister: false }, users: [] };
+let storeReady = false;
+
+function hashPassword(password, salt = crypto.randomBytes(16).toString('hex')) {
+  const hash = crypto.scryptSync(String(password), salt, 64).toString('hex');
+  return { salt, hash };
 }
+
+function checkPassword(user, password) {
+  if (!user || typeof password !== 'string') return false;
+  const { hash } = hashPassword(password, user.salt);
+  const a = Buffer.from(hash, 'hex');
+  const b = Buffer.from(user.hash, 'hex');
+  if (a.length !== b.length) return false;
+  return crypto.timingSafeEqual(a, b);
+}
+
+function makeUser(username, password, role) {
+  const { salt, hash } = hashPassword(password);
+  return { username, salt, hash, role, pv: 0, createdAt: Date.now() };
+}
+
+async function saveStore() {
+  const payload = JSON.stringify(store, null, 2);
+  const tmp = `${USERS_FILE}.tmp`;
+  await fsp.writeFile(tmp, payload, { mode: 0o600 });
+  await fsp.rename(tmp, USERS_FILE);
+}
+
+async function loadStore() {
+  await fsp.mkdir(path.dirname(USERS_FILE), { recursive: true });
+  let raw = null;
+  try {
+    raw = await fsp.readFile(USERS_FILE, 'utf8');
+  } catch {
+    raw = null;
+  }
+
+  if (raw) {
+    try {
+      const parsed = JSON.parse(raw);
+      store = {
+        settings: { allowRegister: Boolean(parsed.settings && parsed.settings.allowRegister) },
+        users: Array.isArray(parsed.users) ? parsed.users : [],
+      };
+    } catch {
+      console.warn('[warn] 账号文件解析失败，已按初始配置重建。');
+      store = { settings: { allowRegister: false }, users: [] };
+    }
+  }
+
+  if (!store.users.length) {
+    store.users.push(makeUser(ADMIN_USER, ADMIN_PASSWORD, 'admin'));
+    console.log(`[init] 已创建初始管理员账号: ${ADMIN_USER}`);
+  }
+  if (!store.users.some((u) => u.role === 'admin')) {
+    store.users[0].role = 'admin';
+  }
+  await saveStore();
+  storeReady = true;
+}
+
+function findUser(username) {
+  if (typeof username !== 'string') return null;
+  const key = username.trim().toLowerCase();
+  return store.users.find((u) => u.username === key) || null;
+}
+
+/* ---------------------------------------------------------------- 工具函数 */
 
 function signToken(payload) {
   const body = Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
@@ -55,7 +127,7 @@ function signToken(payload) {
   return `${body}.${sig}`;
 }
 
-/* 已吊销的会话 ID，退出登录后旧令牌立即失效 */
+/* 已吊销的会话 ID，退出登录 / 改密码后旧令牌立即失效 */
 const revokedSids = new Map();
 
 function revokeSession(sid, exp) {
@@ -89,8 +161,13 @@ function verifyToken(token) {
     return null;
   }
   if (!payload || typeof payload.exp !== 'number' || payload.exp < Date.now()) return null;
-  if (payload.u !== ADMIN_USER) return null;
   if (isRevoked(payload.sid)) return null;
+  const account = findUser(payload.u);
+  if (!account) return null;
+  // 改密码会把 pv 加一，旧令牌全部失效
+  if (Number(payload.pv) !== Number(account.pv || 0)) return null;
+  payload.role = account.role;
+  payload.account = account;
   return payload;
 }
 
@@ -129,7 +206,7 @@ function clearSessionCookie(res) {
   res.append('Set-Cookie', attrs.join('; '));
 }
 
-/** 只允许 DATA_DIR 下的一级文件名，拒绝任何路径穿越 */
+/** 只允许单级文件名，拒绝任何路径穿越 */
 function normalizeName(raw) {
   if (typeof raw !== 'string') return null;
   const base = path.basename(raw.replace(/\\/g, '/')).normalize('NFC');
@@ -147,18 +224,29 @@ function normalizeName(raw) {
   return name || null;
 }
 
-function toId(name) {
-  return Buffer.from(name, 'utf8').toString('base64url');
+/** 文件 id = base64url("<用户名>/<文件名>")，天然带上归属信息 */
+function toId(owner, name) {
+  return Buffer.from(`${owner}/${name}`, 'utf8').toString('base64url');
 }
 
 function fromId(id) {
   if (typeof id !== 'string' || !/^[A-Za-z0-9_-]{1,512}$/.test(id)) return null;
   try {
-    const name = Buffer.from(id, 'base64url').toString('utf8');
-    return normalizeName(name) === name ? name : null;
+    const raw = Buffer.from(id, 'base64url').toString('utf8');
+    const idx = raw.indexOf('/');
+    if (idx <= 0) return null;
+    const owner = raw.slice(0, idx);
+    const name = raw.slice(idx + 1);
+    if (!USERNAME_RE.test(owner)) return null;
+    if (normalizeName(name) !== name) return null;
+    return { owner, name };
   } catch {
     return null;
   }
+}
+
+function userDir(username) {
+  return path.join(DATA_DIR, username);
 }
 
 function contentDisposition(name) {
@@ -178,13 +266,14 @@ async function pathExists(p) {
   }
 }
 
-async function uniqueName(name) {
-  if (!(await pathExists(path.join(DATA_DIR, name)))) return name;
+async function uniqueName(username, name) {
+  const dir = userDir(username);
+  if (!(await pathExists(path.join(dir, name)))) return name;
   const ext = path.extname(name);
   const stem = name.slice(0, name.length - ext.length);
   for (let i = 1; i < 1000; i += 1) {
     const candidate = `${stem} (${i})${ext}`;
-    if (!(await pathExists(path.join(DATA_DIR, candidate)))) return candidate;
+    if (!(await pathExists(path.join(dir, candidate)))) return candidate;
   }
   return `${stem}-${Date.now()}${ext}`;
 }
@@ -231,6 +320,7 @@ app.use((req, res, next) => {
 });
 
 function authUser(req) {
+  if (!storeReady) return null;
   const cookies = parseCookies(req.headers.cookie);
   return verifyToken(cookies[COOKIE_NAME]);
 }
@@ -239,6 +329,14 @@ function requireAuth(req, res, next) {
   const user = authUser(req);
   if (!user) return res.status(401).json({ error: '未登录或登录已过期' });
   req.user = user;
+  req.account = user.account;
+  next();
+}
+
+function requireAdmin(req, res, next) {
+  if (!req.account || req.account.role !== 'admin') {
+    return res.status(403).json({ error: '只有管理员可以执行这个操作' });
+  }
   next();
 }
 
@@ -254,6 +352,17 @@ function sameOrigin(req, res, next) {
   return res.status(403).json({ error: '请求来源校验失败' });
 }
 
+function issueSession(res, account) {
+  const sid = crypto.randomBytes(16).toString('hex');
+  const token = signToken({
+    u: account.username,
+    sid,
+    pv: Number(account.pv || 0),
+    exp: Date.now() + SESSION_TTL,
+  });
+  setSessionCookie(res, token, SESSION_TTL);
+}
+
 app.use('/api', express.json({ limit: '8kb' }));
 
 /* ---------------------------------------------------------------- 接口 */
@@ -267,8 +376,11 @@ app.get('/api/session', (req, res) => {
   res.setHeader('Cache-Control', 'no-store');
   res.json({
     authenticated: Boolean(user),
-    user: user ? user.u : null,
+    user: user ? user.account.username : null,
+    role: user ? user.account.role : null,
+    allowRegister: Boolean(store.settings.allowRegister),
     maxUploadMb: Math.floor(MAX_UPLOAD_BYTES / (1024 * 1024)),
+    minPasswordLen: MIN_PASSWORD_LEN,
   });
 });
 
@@ -280,21 +392,49 @@ app.post('/api/login', sameOrigin, (req, res) => {
     return res.status(429).json({ error: `尝试次数过多，请 ${seconds} 秒后再试` });
   }
 
-  const username = typeof req.body?.username === 'string' ? req.body.username : '';
+  const username = typeof req.body?.username === 'string' ? req.body.username.trim().toLowerCase() : '';
   const password = typeof req.body?.password === 'string' ? req.body.password : '';
-  const ok = safeEqual(username.trim(), ADMIN_USER) & safeEqual(password, ADMIN_PASSWORD);
+  const account = findUser(username);
 
-  if (!ok) {
+  if (!account || !checkPassword(account, password)) {
     recordFailure(ip);
     const left = Math.max(0, RATE_MAX_FAILS - rateState(ip).fails);
     return res.status(401).json({ error: '用户名或密码错误', remaining: left });
   }
 
   loginAttempts.delete(ip);
-  const sid = crypto.randomBytes(16).toString('hex');
-  const token = signToken({ u: ADMIN_USER, sid, exp: Date.now() + SESSION_TTL });
-  setSessionCookie(res, token, SESSION_TTL);
-  return res.json({ ok: true, user: ADMIN_USER });
+  issueSession(res, account);
+  return res.json({ ok: true, user: account.username, role: account.role });
+});
+
+app.post('/api/register', sameOrigin, async (req, res, next) => {
+  try {
+    if (!store.settings.allowRegister) {
+      return res.status(403).json({ error: '管理员还没有开放注册' });
+    }
+
+    const username = typeof req.body?.username === 'string' ? req.body.username.trim().toLowerCase() : '';
+    const password = typeof req.body?.password === 'string' ? req.body.password : '';
+
+    if (!USERNAME_RE.test(username) || RESERVED_NAMES.has(username)) {
+      return res.status(400).json({ error: '账号只能是 2-24 位字母、数字、下划线或短横线' });
+    }
+    if (password.length < MIN_PASSWORD_LEN) {
+      return res.status(400).json({ error: `密码至少 ${MIN_PASSWORD_LEN} 位` });
+    }
+    if (findUser(username)) {
+      return res.status(409).json({ error: '这个账号已经被注册了' });
+    }
+
+    const account = makeUser(username, password, 'user');
+    store.users.push(account);
+    await saveStore();
+    await fsp.mkdir(userDir(username), { recursive: true });
+    issueSession(res, account);
+    return res.json({ ok: true, user: account.username, role: account.role });
+  } catch (err) {
+    next(err);
+  }
 });
 
 app.post('/api/logout', sameOrigin, (req, res) => {
@@ -304,36 +444,139 @@ app.post('/api/logout', sameOrigin, (req, res) => {
   res.json({ ok: true });
 });
 
-app.get('/api/files', requireAuth, async (req, res, next) => {
-  try {
-    await fsp.mkdir(DATA_DIR, { recursive: true });
-    const entries = await fsp.readdir(DATA_DIR, { withFileTypes: true });
-    const files = [];
-    let totalSize = 0;
+/* ------------------------------------------------------- 管理员（后台开关） */
 
+app.get('/api/admin/settings', requireAuth, requireAdmin, async (req, res, next) => {
+  try {
+    const users = [];
+    for (const u of store.users) {
+      const entries = await fsp.readdir(userDir(u.username), { withFileTypes: true }).catch(() => []);
+      const files = entries.filter((e) => e.isFile() && !e.name.startsWith('.')).length;
+      users.push({
+        username: u.username,
+        role: u.role,
+        createdAt: u.createdAt || 0,
+        files,
+      });
+    }
+    res.setHeader('Cache-Control', 'no-store');
+    res.json({
+      allowRegister: Boolean(store.settings.allowRegister),
+      minPasswordLen: MIN_PASSWORD_LEN,
+      users,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post('/api/admin/settings', requireAuth, requireAdmin, sameOrigin, async (req, res, next) => {
+  try {
+    if (typeof req.body?.allowRegister === 'boolean') {
+      store.settings.allowRegister = req.body.allowRegister;
+      await saveStore();
+    }
+    return res.json({ ok: true, allowRegister: Boolean(store.settings.allowRegister) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/** 实时改密码：立即生效，旧的登录状态全部失效，当前这次会话重新签发 */
+app.post('/api/admin/password', requireAuth, requireAdmin, sameOrigin, async (req, res, next) => {
+  try {
+    const password = typeof req.body?.password === 'string' ? req.body.password : '';
+    if (password.length < MIN_PASSWORD_LEN) {
+      return res.status(400).json({ error: `密码至少 ${MIN_PASSWORD_LEN} 位` });
+    }
+
+    const account = req.account;
+    const fresh = hashPassword(password);
+    account.salt = fresh.salt;
+    account.hash = fresh.hash;
+    account.pv = Number(account.pv || 0) + 1;
+    await saveStore();
+
+    issueSession(res, account);
+    return res.json({ ok: true, user: account.username });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/* ---------------------------------------------------------------- 文件接口 */
+
+async function listForAccount(account) {
+  await fsp.mkdir(DATA_DIR, { recursive: true });
+  const targets = [];
+
+  if (account.role === 'admin') {
+    const entries = await fsp.readdir(DATA_DIR, { withFileTypes: true });
+    for (const entry of entries) {
+      if (entry.isDirectory() && !entry.name.startsWith('.') && USERNAME_RE.test(entry.name)) {
+        targets.push({ owner: entry.name, dir: path.join(DATA_DIR, entry.name) });
+      }
+    }
+    // 兼容旧版本：DATA_DIR 根目录下的散落文件归管理员所有
+    const legacy = entries.filter((e) => e.isFile() && !e.name.startsWith('.'));
+    if (legacy.length) {
+      const adminDir = userDir(account.username);
+      await fsp.mkdir(adminDir, { recursive: true });
+      for (const entry of legacy) {
+        await fsp
+          .rename(path.join(DATA_DIR, entry.name), path.join(adminDir, entry.name))
+          .catch(() => {});
+      }
+      targets.push({ owner: account.username, dir: adminDir });
+    }
+  } else {
+    targets.push({ owner: account.username, dir: userDir(account.username) });
+  }
+
+  const files = [];
+  let totalSize = 0;
+  for (const target of targets) {
+    const entries = await fsp.readdir(target.dir, { withFileTypes: true }).catch(() => []);
     for (const entry of entries) {
       if (!entry.isFile() || entry.name.startsWith('.')) continue;
-      const full = path.join(DATA_DIR, entry.name);
+      const full = path.join(target.dir, entry.name);
       const stat = await fsp.stat(full).catch(() => null);
       if (!stat || !stat.isFile()) continue;
       totalSize += stat.size;
       files.push({
-        id: toId(entry.name),
+        id: toId(target.owner, entry.name),
         name: entry.name,
+        owner: target.owner,
         size: stat.size,
         uploadedAt: stat.mtimeMs,
       });
     }
+  }
+  files.sort((a, b) => b.uploadedAt - a.uploadedAt);
+  return { files, totalSize };
+}
 
-    files.sort((a, b) => b.uploadedAt - a.uploadedAt);
+app.get('/api/files', requireAuth, async (req, res, next) => {
+  try {
+    const { files, totalSize } = await listForAccount(req.account);
     res.setHeader('Cache-Control', 'no-store');
-    res.json({ files, count: files.length, totalSize, maxUploadMb: Math.floor(MAX_UPLOAD_BYTES / (1024 * 1024)) });
+    res.json({
+      files,
+      count: files.length,
+      totalSize,
+      maxUploadMb: Math.floor(MAX_UPLOAD_BYTES / (1024 * 1024)),
+    });
   } catch (err) {
     next(err);
   }
 });
 
 app.post('/api/upload', requireAuth, sameOrigin, (req, res) => {
+  const account = req.account;
+  const dir = userDir(account.username);
+  fsp.mkdir(dir, { recursive: true }).catch(() => {});
+  fsp.mkdir(TMP_DIR, { recursive: true }).catch(() => {});
+
   let bus;
   try {
     bus = busboy({
@@ -350,6 +593,7 @@ app.post('/api/upload', requireAuth, sameOrigin, (req, res) => {
   const saved = [];
   const failed = [];
   const pending = [];
+  const pendingJobs = new Set();
   let finished = false;
 
   const cleanup = () => {
@@ -394,11 +638,17 @@ app.post('/api/upload', requireAuth, sameOrigin, (req, res) => {
           return resolve();
         }
         try {
-          const finalName = await uniqueName(name);
-          const finalPath = path.join(DATA_DIR, finalName);
+          const finalName = await uniqueName(account.username, name);
+          const finalPath = path.join(dir, finalName);
           await fsp.rename(tmpPath, finalPath);
           const stat = await fsp.stat(finalPath);
-          saved.push({ id: toId(finalName), name: finalName, size: stat.size, uploadedAt: stat.mtimeMs });
+          saved.push({
+            id: toId(account.username, finalName),
+            name: finalName,
+            owner: account.username,
+            size: stat.size,
+            uploadedAt: stat.mtimeMs,
+          });
           resolve();
         } catch {
           await fsp.unlink(tmpPath).catch(() => {});
@@ -413,8 +663,6 @@ app.post('/api/upload', requireAuth, sameOrigin, (req, res) => {
     pendingJobs.add(job);
     job.finally(() => pendingJobs.delete(job));
   });
-
-  const pendingJobs = new Set();
 
   bus.on('error', () => {
     if (!finished) {
@@ -439,13 +687,25 @@ app.post('/api/upload', requireAuth, sameOrigin, (req, res) => {
   req.pipe(bus);
 });
 
+function resolveOwnedFile(req, res) {
+  const ref = fromId(req.params.id);
+  if (!ref) {
+    res.status(404).json({ error: '文件不存在' });
+    return null;
+  }
+  if (req.account.role !== 'admin' && ref.owner !== req.account.username) {
+    res.status(404).json({ error: '文件不存在' });
+    return null;
+  }
+  return { ...ref, full: path.join(userDir(ref.owner), ref.name) };
+}
+
 app.delete('/api/files/:id', requireAuth, sameOrigin, async (req, res) => {
-  const name = fromId(req.params.id);
-  if (!name) return res.status(400).json({ error: '文件不存在' });
-  const full = path.join(DATA_DIR, name);
+  const target = resolveOwnedFile(req, res);
+  if (!target) return;
   try {
-    await fsp.unlink(full);
-    res.json({ ok: true, name });
+    await fsp.unlink(target.full);
+    res.json({ ok: true, name: target.name, owner: target.owner });
   } catch (err) {
     if (err.code === 'ENOENT') return res.status(404).json({ error: '文件不存在' });
     res.status(500).json({ error: '删除失败' });
@@ -453,16 +713,15 @@ app.delete('/api/files/:id', requireAuth, sameOrigin, async (req, res) => {
 });
 
 app.get('/api/files/:id/download', requireAuth, async (req, res) => {
-  const name = fromId(req.params.id);
-  if (!name) return res.status(404).json({ error: '文件不存在' });
-  const full = path.join(DATA_DIR, name);
-  const stat = await fsp.stat(full).catch(() => null);
+  const target = resolveOwnedFile(req, res);
+  if (!target) return;
+  const stat = await fsp.stat(target.full).catch(() => null);
   if (!stat || !stat.isFile()) return res.status(404).json({ error: '文件不存在' });
 
   res.setHeader('Content-Type', 'application/octet-stream');
-  res.setHeader('Content-Disposition', contentDisposition(name));
+  res.setHeader('Content-Disposition', contentDisposition(target.name));
   res.setHeader('Cache-Control', 'private, no-store');
-  res.sendFile(full, (err) => {
+  res.sendFile(target.full, (err) => {
     if (err && !res.headersSent) {
       res.status(500).json({ error: '文件读取失败' });
     }
@@ -494,6 +753,7 @@ app.use((err, req, res, next) => {
 (async () => {
   await fsp.mkdir(DATA_DIR, { recursive: true });
   await fsp.mkdir(TMP_DIR, { recursive: true });
+  await loadStore();
   // 清掉上次进程残留的临时文件
   for (const f of await fsp.readdir(TMP_DIR).catch(() => [])) {
     fsp.unlink(path.join(TMP_DIR, f)).catch(() => {});
@@ -508,10 +768,11 @@ app.use((err, req, res, next) => {
   const shutdown = (signal) => {
     console.log(`\n收到 ${signal}，正在关闭...`);
     server.close(() => process.exit(0));
-    setTimeout(() => process.exit(0), 8000).unref();
+    setTimeout(() => process.exit(0), 3000).unref();
   };
-  process.on('SIGTERM', () => shutdown('SIGTERM'));
   process.on('SIGINT', () => shutdown('SIGINT'));
-})();
-
-module.exports = app;
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+})().catch((err) => {
+  console.error('启动失败:', err);
+  process.exit(1);
+});
