@@ -45,6 +45,51 @@
     toastTimer = setTimeout(() => el.classList.remove('show'), 2600);
   }
 
+  /* ------------------------------------------------------------- 自带确认框（不用浏览器弹窗） */
+
+  let modalResolve = null;
+
+  function closeModal(result) {
+    const mask = $('#modalMask');
+    mask.hidden = true;
+    const done = modalResolve;
+    modalResolve = null;
+    if (done) done(result);
+  }
+
+  function askConfirm({ title = '确认操作', text = '', okText = '确定', cancelText = '取消', danger = true } = {}) {
+    const mask = $('#modalMask');
+    $('#modalTitle').textContent = title;
+    $('#modalText').textContent = text;
+    const okBtn = $('#modalOk');
+    const cancelBtn = $('#modalCancel');
+    okBtn.textContent = okText;
+    cancelBtn.textContent = cancelText;
+    okBtn.className = danger ? 'btn btn-danger' : 'btn btn-primary';
+    mask.hidden = false;
+    cancelBtn.focus();
+
+    return new Promise((resolve) => {
+      modalResolve = resolve;
+    });
+  }
+
+  $('#modalOk').addEventListener('click', () => closeModal(true));
+  $('#modalCancel').addEventListener('click', () => closeModal(false));
+  $('#modalMask').addEventListener('click', (event) => {
+    if (event.target === $('#modalMask')) closeModal(false);
+  });
+  document.addEventListener('keydown', (event) => {
+    if ($('#modalMask').hidden) return;
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      closeModal(false);
+    } else if (event.key === 'Enter') {
+      event.preventDefault();
+      closeModal(true);
+    }
+  });
+
   async function request(url, options = {}) {
     const res = await fetch(url, { credentials: 'same-origin', ...options });
     const type = res.headers.get('content-type') || '';
@@ -342,7 +387,11 @@
   }
 
   async function removeFile(file) {
-    const sure = window.confirm(`确定删除「${file.name}」？此操作不可恢复。`);
+    const sure = await askConfirm({
+      title: '删除文件',
+      text: `确定删除「${file.name}」？此操作不可恢复。`,
+      okText: '删除',
+    });
     if (!sure) return;
     try {
       await request(`/api/files/${encodeURIComponent(file.id)}`, { method: 'DELETE' });
@@ -820,9 +869,11 @@
       }
 
       async function deleteUser(u, li) {
-        const ok = window.confirm(
-          `确定删除账号「${u.username}」？\n它的 ${u.files || 0} 个文件会一起删除，无法恢复。`,
-        );
+        const ok = await askConfirm({
+          title: '删除账号',
+          text: `确定删除账号「${u.username}」？它的 ${u.files || 0} 个文件会一起删除，无法恢复。`,
+          okText: '删除账号',
+        });
         if (!ok) return;
         try {
           const res = await request('/api/admin/users/delete', {
