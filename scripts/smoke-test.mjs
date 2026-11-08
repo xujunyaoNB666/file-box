@@ -92,7 +92,7 @@ try {
   });
   check('正确密码登录成功', login.status === 200, `实际 ${login.status}`);
   const setCookie = login.headers.getSetCookie?.() ?? [];
-  const cookieHeader = (setCookie[0] || '').split(';')[0];
+  let cookieHeader = (setCookie[0] || '').split(';')[0];
   check('下发了会话 Cookie', cookieHeader.startsWith('fb_session='), cookieHeader);
   const session1 = await fetch(`${BASE}/api/session`, { headers: { cookie: cookieHeader } }).then((r) => r.json());
   check('session 显示已登录', session1.authenticated === true && session1.user === USER, JSON.stringify(session1));
@@ -146,18 +146,96 @@ try {
   const list2 = await fetch(`${BASE}/api/files`, { headers: { cookie: cookieHeader } }).then((r) => r.json());
   check('删除后剩 1 个文件', list2.count === 1, JSON.stringify(list2.count));
 
-  console.log('\n[7] 退出');
+  console.log('\n[6] 多账号与管理员后台');
+  const regClosed = await fetch(`${BASE}/api/register`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: 'guest01', password: 'guestpass' }),
+  });
+  check('注册开关默认关闭，注册被拒 403', regClosed.status === 403, `实际 ${regClosed.status}`);
+
+  const openReg = await fetch(`${BASE}/api/admin/settings`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', cookie: cookieHeader },
+    body: JSON.stringify({ allowRegister: true }),
+  });
+  check('管理员可以打开注册开关', openReg.status === 200, `实际 ${openReg.status}`);
+
+  const guestLoginGuard = await fetch(`${BASE}/api/admin/settings`, { headers: { cookie: cookieHeader } });
+  check('管理员可读取后台设置', guestLoginGuard.status === 200, `实际 ${guestLoginGuard.status}`);
+
+  const reg = await fetch(`${BASE}/api/register`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: 'guest01', password: 'guestpass' }),
+  });
+  const regJson = await reg.json();
+  check('开关打开后可以注册', reg.status === 200, JSON.stringify(regJson));
+  check('注册返回普通账号角色', regJson.role === 'user', JSON.stringify(regJson));
+  const guestCookie = (reg.headers.getSetCookie?.() ?? []).map((c) => c.split(';')[0])[0] || '';
+
+  const guestList = await fetch(`${BASE}/api/files`, { headers: { cookie: guestCookie } }).then((r) => r.json());
+  check('新账号看不到管理员文件', guestList.count === 0, JSON.stringify(guestList.count));
+
+  const remaining = (list2.files || [])[0];
+  const guestDl = await fetch(`${BASE}/api/files/${remaining.id}/download`, { headers: { cookie: guestCookie } });
+  check('新账号下载别人的文件返回 404', guestDl.status === 404, `实际 ${guestDl.status}`);
+
+  const guestForm = new FormData();
+  guestForm.append('files', new Blob(['guest data'], { type: 'text/plain' }), 'guest.txt');
+  const guestUpload = await fetch(`${BASE}/api/upload`, { method: 'POST', headers: { cookie: guestCookie }, body: guestForm });
+  check('新账号可以上传自己的文件', guestUpload.status === 200, `实际 ${guestUpload.status}`);
+
+  const adminList = await fetch(`${BASE}/api/files`, { headers: { cookie: cookieHeader } }).then((r) => r.json());
+  check('管理员能看到所有人的文件', adminList.count === 2, JSON.stringify(adminList.count));
+  const guestFile = (adminList.files || []).find((f) => f.name === 'guest.txt');
+  check('管理员列表带归属账号', Boolean(guestFile) && guestFile.owner === 'guest01', JSON.stringify(guestFile));
+  const adminDlGuest = await fetch(`${BASE}/api/files/${guestFile.id}/download`, { headers: { cookie: cookieHeader } });
+  check('管理员可以下载他人文件', adminDlGuest.status === 200, `实际 ${adminDlGuest.status}`);
+
+  const guestAdmin = await fetch(`${BASE}/api/admin/settings`, { headers: { cookie: guestCookie } });
+  check('普通账号访问后台返回 403', guestAdmin.status === 403, `实际 ${guestAdmin.status}`);
+
+  console.log('\n[7] 实时改密码');
+  const changePwd = await fetch(`${BASE}/api/admin/password`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', cookie: cookieHeader },
+    body: JSON.stringify({ password: 'newpass123' }),
+  });
+  check('管理员改密码成功', changePwd.status === 200, `实际 ${changePwd.status}`);
+  const newCookie = (changePwd.headers.getSetCookie?.() ?? []).map((c) => c.split(';')[0])[0] || '';
+
+  const oldCookieSession = await fetch(`${BASE}/api/session`, { headers: { cookie: cookieHeader } }).then((r) => r.json());
+  check('改密码后旧会话失效', oldCookieSession.authenticated === false, JSON.stringify(oldCookieSession));
+  const newCookieSession = await fetch(`${BASE}/api/session`, { headers: { cookie: newCookie } }).then((r) => r.json());
+  check('改密码后新会话有效', newCookieSession.authenticated === true, JSON.stringify(newCookieSession));
+
+  const oldPwdLogin = await fetch(`${BASE}/api/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: USER, password: PASSWORD }),
+  });
+  check('旧密码登录失败', oldPwdLogin.status === 401, `实际 ${oldPwdLogin.status}`);
+  const newPwdLogin = await fetch(`${BASE}/api/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: USER, password: 'newpass123' }),
+  });
+  check('新密码立即可以登录', newPwdLogin.status === 200, `实际 ${newPwdLogin.status}`);
+  cookieHeader = (newPwdLogin.headers.getSetCookie?.() ?? []).map((c) => c.split(';')[0])[0] || newCookie;
+
+  console.log('\n[8] 退出');
   await fetch(`${BASE}/api/logout`, { method: 'POST', headers: { cookie: cookieHeader } });
   const session2 = await fetch(`${BASE}/api/session`, { headers: { cookie: cookieHeader } }).then((r) => r.json());
   check('退出后会话失效', session2.authenticated === false);
 
-  console.log('\n[8] 页面');
+  console.log('\n[9] 页面');
   const page = await fetch(`${BASE}/`);
   const html = await page.text();
   check('首页返回 200', page.status === 200, `实际 ${page.status}`);
   check('首页包含登录框', html.includes('loginForm'));
 
-  console.log('\n[9] 登录限流');
+  console.log('\n[10] 登录限流');
   let blockedStatus = 0;
   for (let i = 0; i < 6; i += 1) {
     const res = await fetch(`${BASE}/api/login`, {
